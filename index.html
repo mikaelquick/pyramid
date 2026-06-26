@@ -1,0 +1,3743 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<title>Pharaoh's Pyramid</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  html, body {
+    height: 100%;
+    width: 100%;
+    background: #1a0f08;
+    font-family: 'Georgia', serif;
+    overflow: hidden;
+    color: #f4d97a;
+  }
+  #frame {
+    position: relative;
+    display: grid;
+    grid-template-columns: 50px 1fr 50px;
+    grid-template-rows: 42px 1fr 42px;
+    gap: 0;
+    padding: 6px;
+    width: 100vw;
+    height: 100vh;
+    background:
+      linear-gradient(to bottom, #d8a868 0%, #b88040 50%, #6a3818 100%);
+    box-shadow: inset 0 0 30px rgba(0,0,0,0.4);
+    border: none;
+  }
+  #frame.fullscreen {
+    padding: 0; border: 0; border-radius: 0; background: #000;
+    grid-template-columns: 1fr; grid-template-rows: 1fr;
+    width: 100vw; height: 100vh;
+  }
+  #frame.fullscreen .frieze { display: none; }
+  #frame.fullscreen #wrap {
+    grid-column: 1; grid-row: 1;
+    width: 100vw; height: 100vh; max-width: 100vw; max-height: 100vh;
+    border-radius: 0;
+  }
+
+  .frieze {
+    background: linear-gradient(to bottom, #1a0a04 0%, #2a1408 100%);
+    border: 2px solid #c89058;
+    border-radius: 3px;
+    color: #f4d050;
+    font-size: 22px;
+    text-align: center;
+    letter-spacing: 4px;
+    overflow: hidden;
+    white-space: nowrap;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-shadow: 0 1px 0 #5a3818;
+    font-family: 'Noto Sans Egyptian Hieroglyphs', 'Segoe UI Historic', 'Aegyptus', serif;
+    line-height: 1;
+  }
+  .frieze-top { grid-column: 1 / 4; grid-row: 1; }
+  .frieze-bot { grid-column: 1 / 4; grid-row: 3; }
+  .frieze-side {
+    grid-row: 2;
+    writing-mode: vertical-rl;
+    text-orientation: upright;
+    letter-spacing: 6px;
+    font-size: 24px;
+    flex-direction: column;
+    background: linear-gradient(to right, #1a0a04 0%, #2a1408 100%);
+  }
+  .frieze-left  { grid-column: 1; }
+  .frieze-right { grid-column: 3; }
+
+  #wrap {
+    position: relative;
+    width: 100%;
+    height: 100%;
+    grid-column: 2;
+    grid-row: 2;
+    box-shadow: inset 0 0 0 3px #2a1408, 0 0 20px rgba(0,0,0,0.5);
+    border-radius: 3px;
+    overflow: hidden;
+  }
+  canvas {
+    display: block;
+    width: 100%;
+    height: 100%;
+    cursor: crosshair;
+  }
+  #hud {
+    position: absolute;
+    top: 0; left: 0; right: 0;
+    padding: 10px 16px;
+    display: flex;
+    gap: 20px;
+    align-items: center;
+    background: linear-gradient(to bottom, rgba(0,0,0,0.55), transparent);
+    pointer-events: none;
+    z-index: 5;
+    font-size: 14px;
+  }
+  .stat { display: flex; flex-direction: column; gap: 4px; }
+  .label { font-size: 11px; opacity: 0.8; letter-spacing: 1px; text-transform: uppercase; }
+  .bar {
+    width: 180px; height: 12px;
+    background: rgba(0,0,0,0.5);
+    border: 1px solid #c89b3c;
+    border-radius: 6px;
+    overflow: hidden;
+  }
+  .fill { height: 100%; transition: width 0.2s; }
+  .fill.pyramid { background: linear-gradient(90deg, #e6c060, #f8e094); }
+  .timeLabel { font-size: 13px; min-width: 110px; }
+  #score { margin-left: auto; font-size: 20px; font-weight: bold; color: #fff3c4; text-shadow: 2px 2px 0 #000; }
+  #workers { font-size: 14px; color: #fff3c4; }
+  #muteBtn, #fsBtn {
+    pointer-events: auto;
+    background: rgba(0,0,0,0.45);
+    border: 1px solid #c89b3c;
+    color: #f4d97a;
+    font-family: inherit;
+    font-size: 16px;
+    padding: 4px 10px;
+    border-radius: 4px;
+    cursor: pointer;
+  }
+  #muteBtn:hover, #fsBtn:hover { background: rgba(0,0,0,0.7); }
+  #overlay {
+    position: absolute;
+    inset: 0;
+    background:
+      radial-gradient(circle at center, rgba(70,40,10,0.85) 0%, rgba(20,10,0,0.95) 70%);
+    display: flex;
+    flex-direction: column;
+    justify-content: center;
+    align-items: center;
+    text-align: center;
+    z-index: 10;
+    padding: 20px;
+    gap: 24px;
+  }
+  #overlay h1 {
+    font-size: 64px;
+    color: #f8d870;
+    margin: 0;
+    text-shadow: 4px 4px 0 #6b3410, 0 0 22px rgba(244,216,112,0.4);
+    letter-spacing: 4px;
+    font-weight: bold;
+  }
+  #overlay .logo {
+    filter: drop-shadow(0 6px 10px rgba(0,0,0,0.6));
+  }
+  #overlay p { max-width: 600px; line-height: 1.6; margin-bottom: 10px; }
+  #overlay button {
+    padding: 18px 60px;
+    font-size: 28px;
+    font-family: inherit;
+    background: linear-gradient(to bottom, #ffe48a, #c89b3c 60%, #8a6018);
+    border: 3px solid #6b3410;
+    border-radius: 8px;
+    color: #2a1a0a;
+    cursor: pointer;
+    font-weight: bold;
+    letter-spacing: 4px;
+    box-shadow: 0 6px 0 #6b3410, 0 10px 30px rgba(0,0,0,0.5);
+    transition: transform 0.08s, box-shadow 0.08s;
+  }
+  #overlay button:hover { filter: brightness(1.1); transform: translateY(-2px); box-shadow: 0 8px 0 #6b3410, 0 12px 32px rgba(0,0,0,0.5); }
+  #overlay button:active { transform: translateY(4px); box-shadow: 0 2px 0 #6b3410, 0 4px 12px rgba(0,0,0,0.5); }
+  #overlay.hidden { display: none; }
+  .hint { font-size: 13px; opacity: 0.55; letter-spacing: 2px; }
+</style>
+</head>
+<body>
+<div id="frame">
+  <div class="frieze frieze-top">𓂀 𓆣 𓁹 𓊨 𓀀 𓋹 𓏏 𓅓 𓂀 𓆣 𓁹 𓊨 𓀀 𓋹 𓏏 𓅓 𓂀 𓆣 𓁹 𓊨 𓀀 𓋹 𓏏</div>
+  <div class="frieze frieze-side frieze-left">𓎼 𓏏 𓊃 𓂧 𓂝 𓆓 𓇋 𓏊 𓄿 𓋹 𓎼 𓏏 𓊃 𓂧 𓂝 𓆓</div>
+  <div id="wrap">
+  <canvas id="game" width="1280" height="720"></canvas>
+  <div id="hud">
+    <div class="stat">
+      <div class="label">Pyramid</div>
+      <div class="bar"><div id="pyramidFill" class="fill pyramid" style="width:0%"></div></div>
+    </div>
+    <div class="timeLabel" id="timeLabel">☀ Day</div>
+    <div id="workers">Workers: 7/7</div>
+    <div id="score">Stones: 0</div>
+    <button id="muteBtn" title="Toggle sound">🔊</button>
+    <button id="fsBtn" title="Toggle fullscreen">⛶</button>
+  </div>
+  <div id="overlay">
+    <svg class="logo" viewBox="0 0 220 220" width="180" height="180" xmlns="http://www.w3.org/2000/svg">
+      <!-- curling whip lash -->
+      <path d="M55,180 Q90,100 130,80 Q175,55 195,30"
+        stroke="#3a2010" stroke-width="9" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M55,180 Q90,100 130,80 Q175,55 195,30"
+        stroke="#6b4222" stroke-width="4" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <!-- crack burst at tip -->
+      <g transform="translate(195,30)">
+        <path d="M0,-18 L4,-4 L18,0 L4,4 L0,18 L-4,4 L-18,0 L-4,-4 Z" fill="#fff4b8"/>
+        <circle r="6" fill="#ffff80"/>
+      </g>
+      <!-- gold handle -->
+      <rect x="38" y="172" width="34" height="46" fill="#f4d050" rx="6" stroke="#6b3410" stroke-width="3"/>
+      <rect x="38" y="170" width="34" height="8" fill="#a07020" rx="3"/>
+      <rect x="38" y="200" width="34" height="6" fill="#a07020"/>
+      <!-- wrist strap -->
+      <path d="M55,176 Q40,170 30,178" stroke="#3a2010" stroke-width="3" fill="none" stroke-linecap="round"/>
+    </svg>
+    <h1>PHARAOH'S PYRAMID</h1>
+    <button id="startBtn">PLAY</button>
+    <div class="hint">WASD · SPACE TO WHIP</div>
+  </div>
+  </div><!-- /#wrap -->
+  <div class="frieze frieze-side frieze-right">𓀀 𓁹 𓂀 𓆣 𓋹 𓊪 𓏏 𓅓 𓆑 𓀀 𓁹 𓂀 𓆣 𓋹 𓊪 𓏏</div>
+  <div class="frieze frieze-bot">𓊪 𓆑 𓇋 𓏤 𓀁 𓆄 𓂁 𓊽 𓊪 𓆑 𓇋 𓏤 𓀁 𓆄 𓂁 𓊽 𓊪 𓆑 𓇋 𓏤 𓀁 𓆄 𓂁</div>
+</div><!-- /#frame -->
+<script>
+(() => {
+  const canvas = document.getElementById('game');
+  const ctx = canvas.getContext('2d');
+  const W = canvas.width, H = canvas.height;
+  const overlay = document.getElementById('overlay');
+  const startBtn = document.getElementById('startBtn');
+  const pyramidFill = document.getElementById('pyramidFill');
+  const timeLabel = document.getElementById('timeLabel');
+  const workersEl = document.getElementById('workers');
+  const scoreEl = document.getElementById('score');
+
+  const TOTAL_WORKERS = 12;
+  const DAY_LENGTH = 60 * 60; // 60 seconds at 60fps
+
+  // ---------- Optional Sphinx sprite ----------
+  // If images/sphinx.png exists, it will be used. Otherwise the canvas drawing is the fallback.
+  const sphinxImg = new Image();
+  let sphinxImgLoaded = false;
+  sphinxImg.onload = () => { sphinxImgLoaded = true; };
+  sphinxImg.onerror = () => { sphinxImgLoaded = false; };
+  sphinxImg.src = 'images/sphinx.png';
+
+  // ---------- Audio ----------
+  const audioOn = { value: true };
+  // Pool av whip-ljud så snabba pisk kan överlappa
+  const WHIP_POOL_SIZE = 6;
+  const whipPool = [];
+  for (let i = 0; i < WHIP_POOL_SIZE; i++) {
+    const a = new Audio('audio/whip.wav');
+    a.volume = 0.7;
+    a.preload = 'auto';
+    whipPool.push(a);
+  }
+  let whipIdx = 0;
+  function playWhip() {
+    if (!audioOn.value) return;
+    const a = whipPool[whipIdx];
+    whipIdx = (whipIdx + 1) % WHIP_POOL_SIZE;
+    try {
+      a.currentTime = 0;
+      a.play().catch(() => {});
+    } catch (e) {}
+  }
+  const MUSIC_TRACKS = ['audio/music.mp3', 'audio/music2.mp3', 'audio/music3.mp3'];
+  let music = null;
+  let musicQueue = [];
+  function shuffleTracks() {
+    const arr = MUSIC_TRACKS.slice();
+    for (let i = arr.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+  function buildMusicQueue() {
+    musicQueue = shuffleTracks();
+  }
+  function playNextTrack() {
+    if (!audioOn.value) return;
+    if (musicQueue.length === 0) {
+      // omblanda när alla låtarna spelats — och se till att den första nya inte är samma som den sista vi spelade
+      const last = music && music.src ? music.src.split('/').pop() : null;
+      buildMusicQueue();
+      const fname = musicQueue[0].split('/').pop();
+      if (last && fname === last && musicQueue.length > 1) {
+        [musicQueue[0], musicQueue[1]] = [musicQueue[1], musicQueue[0]];
+      }
+    }
+    const track = musicQueue.shift();
+    if (music) { try { music.pause(); } catch(e) {} }
+    music = new Audio(track);
+    music.loop = false; // viktigt: ska gå vidare till nästa
+    music.volume = 0.35;
+    music.preload = 'auto';
+    music.addEventListener('ended', () => {
+      if (audioOn.value && state.running) playNextTrack();
+    });
+    music.play().catch(() => {});
+  }
+  function startMusic() {
+    if (!audioOn.value) return;
+    if (musicQueue.length === 0) buildMusicQueue();
+    playNextTrack();
+  }
+  function stopMusic() { if (music) try { music.pause(); } catch(e) {} }
+
+  // ---------- State ----------
+  const state = {
+    running: false,
+    won: false,
+    score: 0,
+    blocksPlaced: 0,
+    blocksTarget: 60,
+    time: 0,
+    dayTime: 0.15, // 0..1, börjar tidig morgon
+    whipCooldown: 0,
+    cracks: [],
+    floaters: [],
+    stars: [],
+    crows: [], // vultures circling over downed workers
+    animals: [], // cats wandering in the desert
+    birds: [], // small daytime birds (flocks across the sky)
+    bloodSplatters: [], // persistent blood on the ground
+    chatBubbles: [], // {worker, text, life, decay, offsetX}
+  };
+
+  const CHAT_PHRASES = [
+    '𓀀 𓁹', '𓋹?', '𓊪 𓏏', '𓂀!', '𓆑 𓀀',
+    '𓅓 𓊨', '𓎼 𓏏', '𓊃 𓊽', '𓂝 𓆓', '𓄿 𓋹',
+    '𓆣 𓅓', '𓊪 𓆑 𓏏', '𓁹 𓋹', '𓂀 𓊨?', '𓀁 𓀀',
+    '𓏏 𓎼', '𓆄 𓂁', '𓏤 𓀁', '𓇋 𓏊', '𓆓 𓅓!',
+    '𓊨 𓂀', '𓋹 𓊪 𓋹', '𓀀?', '𓆣!', '𓎟 𓆑',
+  ];
+  function spawnChatBubble(w, text) {
+    // hindra dubbla bubblor på samma person
+    if (state.chatBubbles.some(b => b.worker === w && b.life > 0.2)) return;
+    state.chatBubbles.push({
+      worker: w,
+      text: text || CHAT_PHRASES[Math.floor(Math.random()*CHAT_PHRASES.length)],
+      life: 1.0,
+      decay: 0.011,  // ~5.5s
+      offsetX: (Math.random() - 0.5) * 6,
+    });
+  }
+
+  // ---------- Kill-cam zoom-in (när någon piskas ner) ----------
+  const ZOOM_IN_FRAMES   = 22;
+  const ZOOM_HOLD_FRAMES = 22;
+  const ZOOM_OUT_FRAMES  = 32;
+  const ZOOM_TOTAL_FRAMES = ZOOM_IN_FRAMES + ZOOM_HOLD_FRAMES + ZOOM_OUT_FRAMES;
+  const killZoom = {
+    active: false,
+    timer: 0,
+    total: ZOOM_TOTAL_FRAMES,
+    victimX: 0,
+    victimY: 0,
+  };
+  function triggerKillZoom(w) {
+    if (killZoom.active) return;
+    if (Math.random() > 0.45) return; // ~45% chans
+    killZoom.active = true;
+    killZoom.timer = killZoom.total;
+    killZoom.victimX = w.x;
+    killZoom.victimY = w.y;
+  }
+  function inKillZoom() { return killZoom.active; }
+  function killZoomState() {
+    // returnerar { scale, vignette, elapsed, phase }
+    if (!killZoom.active) return { scale: 1, vignette: 0, phase: 'none' };
+    const elapsed = killZoom.total - killZoom.timer;
+    const peakScale = 3.2;
+    if (elapsed < ZOOM_IN_FRAMES) {
+      const t = elapsed / ZOOM_IN_FRAMES;
+      const eased = 1 - Math.pow(1 - t, 2.6);
+      return { scale: 1 + eased * (peakScale - 1), vignette: eased, phase: 'in' };
+    } else if (elapsed < ZOOM_IN_FRAMES + ZOOM_HOLD_FRAMES) {
+      return { scale: peakScale, vignette: 1, phase: 'hold' };
+    } else {
+      const t = (elapsed - ZOOM_IN_FRAMES - ZOOM_HOLD_FRAMES) / ZOOM_OUT_FRAMES;
+      const eased = 1 - Math.pow(1 - t, 2.0);
+      return { scale: peakScale - eased * (peakScale - 1), vignette: 1 - eased, phase: 'out' };
+    }
+  }
+
+  // Stjärnor (statiska positioner)
+  for (let i = 0; i < 60; i++) {
+    state.stars.push({
+      x: Math.random()*W,
+      y: Math.random()*H*0.55,
+      size: Math.random()*1.5 + 0.5,
+      twinkle: Math.random()*Math.PI*2,
+    });
+  }
+
+  // ---------- Input ----------
+  const keys = {};
+  let mouseX = W/2, mouseY = H/2;
+
+  window.addEventListener('keydown', e => {
+    keys[e.key.toLowerCase()] = true;
+    if (e.code === 'Space') { e.preventDefault(); tryWhip(); }
+  });
+  window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
+  canvas.addEventListener('mousemove', e => {
+    const r = canvas.getBoundingClientRect();
+    mouseX = (e.clientX - r.left) * (W / r.width);
+    mouseY = (e.clientY - r.top) * (H / r.height);
+  });
+  canvas.addEventListener('mousedown', () => { tryWhip(); });
+
+  // ---------- Pharaoh ----------
+  const pharaoh = {
+    x: W/2, y: H*0.7,
+    vx: 0, vy: 0,
+    speed: 3.2,
+    facing: 1,
+    walkPhase: 0,
+    whipPhase: 0,
+  };
+
+  // ---------- Workers ----------
+  const workers = [];
+  // Distribution of worker types for one full team
+  const WORKER_TYPE_POOL = [
+    'man','man','man','man','man',
+    'woman','woman',
+    'child','child','child',
+    'fat','fat',
+  ];
+  let workerTypeIdx = 0;
+  function pickWorkerType() {
+    // shuffle once at game start, then walk the pool
+    return WORKER_TYPE_POOL[workerTypeIdx++ % WORKER_TYPE_POOL.length];
+  }
+
+  function makeWorker(spawnFromEdge = false, forcedType) {
+    const skinTones = ['#c08850','#a87038','#d49862','#b07840'];
+    const kiltTones = ['#e8d090','#d0b070','#f0e0a0'];
+    const womenKiltTones = ['#f0e8d0','#f4e0b8','#e8d8a8'];
+    const type = forcedType || pickWorkerType();
+    const speedMul = (type === 'child') ? 1.08 : (type === 'fat') ? 0.78 : 1.0;
+    return {
+      type,
+      speedMul,
+      x: spawnFromEdge ? -20 : (240 + Math.random()*820),
+      y: spawnFromEdge ? (530 + Math.random()*80) : (490 + Math.random()*180),
+      vx: 0, vy: 0,
+      energy: 60 + Math.random()*40,
+      hp: 100,
+      carrying: false,
+      target: null,
+      state: 'idle',  // idle, fetch, carry, lazy, downed
+      walkPhase: Math.random()*Math.PI*2,
+      skin: skinTones[Math.floor(Math.random()*skinTones.length)],
+      kilt: (type === 'woman')
+        ? womenKiltTones[Math.floor(Math.random()*womenKiltTones.length)]
+        : kiltTones[Math.floor(Math.random()*kiltTones.length)],
+      hair: (type === 'woman') ? (Math.random()<0.7 ? '#1a0e08' : '#3a2010') : null,
+      scared: 0,
+      enteringFrom: spawnFromEdge,
+      downedTimer: 0,
+      downedFacing: 1,
+      bloodPool: 0,
+      wakeBoost: 0, // protection-timer after wake
+      lazyAction: 'sleeping',  // sleeping | playing_friend | playing_animal | dancing
+      lazyTimer: 0,
+      lazyTarget: null,
+      restZone: null,
+      restSpot: null,
+      atRestZone: false,
+      facing: 1,
+      pickupTimer: 0,
+    };
+  }
+  function spawnWorkers(n) {
+    // shuffle pool så typerna varierar lite varje match
+    workerTypeIdx = 0;
+    for (let i = WORKER_TYPE_POOL.length - 1; i > 0; i--) {
+      const j = Math.floor(Math.random() * (i + 1));
+      [WORKER_TYPE_POOL[i], WORKER_TYPE_POOL[j]] = [WORKER_TYPE_POOL[j], WORKER_TYPE_POOL[i]];
+    }
+    for (let i = 0; i < n; i++) workers.push(makeWorker(false));
+  }
+
+  // ---------- Animals (cats) ----------
+  function makeAnimal() {
+    const colors = ['#d49a52', '#a87038', '#c8a06c', '#3a2a18'];
+    return {
+      x: 300 + Math.random()*(W - 600),
+      y: 540 + Math.random()*120,
+      vx: 0, vy: 0,
+      walkPhase: Math.random()*Math.PI*2,
+      facing: Math.random() < 0.5 ? -1 : 1,
+      state: 'wander',  // wander | sit | sleep | chased | dead
+      stateTimer: 120 + Math.random()*180,
+      target: null,
+      color: colors[Math.floor(Math.random()*colors.length)],
+      bellyColor: '#f4e0b4',
+      speed: 0.6 + Math.random()*0.4,
+      hp: 60,
+      blood: 0,
+      deadFacing: 1,
+    };
+  }
+  function spawnAnimals(n) {
+    for (let i = 0; i < n; i++) state.animals.push(makeAnimal());
+  }
+
+  function updateAnimal(a) {
+    a.stateTimer--;
+    // bli skrämd om farao är nära
+    const dxp = pharaoh.x - a.x, dyp = pharaoh.y - a.y;
+    if (Math.hypot(dxp, dyp) < 70 && a.state !== 'chased') {
+      a.state = 'chased';
+      a.stateTimer = 90;
+      a.target = null;
+    }
+    if (a.stateTimer <= 0) {
+      // välj nytt beteende
+      const r = Math.random();
+      if (r < 0.45) {
+        a.state = 'wander';
+        // 65% av gångerna sikta mot en vilo-zon, annars helt slumpmässigt
+        if (Math.random() < 0.65) {
+          const z = pickRestZone();
+          a.target = {
+            x: z.x + (Math.random()-0.5)*120,
+            y: z.y + (Math.random()-0.5)*50,
+          };
+        } else {
+          a.target = {
+            x: 250 + Math.random()*(W - 500),
+            y: 530 + Math.random()*150,
+          };
+        }
+        a.stateTimer = 240 + Math.random()*300;
+      } else if (r < 0.75) {
+        a.state = 'sit';
+        a.stateTimer = 180 + Math.random()*240;
+      } else {
+        a.state = 'sleep';
+        a.stateTimer = 300 + Math.random()*240;
+      }
+    }
+    if (a.state === 'wander' && a.target) {
+      const dx = a.target.x - a.x, dy = a.target.y - a.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 6) { a.target = null; a.stateTimer = 30; }
+      else {
+        a.x += (dx/d) * a.speed;
+        a.y += (dy/d) * a.speed;
+        a.walkPhase += 0.25;
+        if (dx !== 0) a.facing = Math.sign(dx);
+      }
+    } else if (a.state === 'chased') {
+      // spring bort från farao
+      const dx = a.x - pharaoh.x, dy = a.y - pharaoh.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 0.001) {
+        a.x += (dx/d) * a.speed * 2.5;
+        a.y += (dy/d) * a.speed * 1.5;
+        a.walkPhase += 0.4;
+        if (dx !== 0) a.facing = Math.sign(dx);
+      }
+      // håll inne på spelplanen
+      a.x = Math.max(80, Math.min(W - 80, a.x));
+      a.y = Math.max(520, Math.min(H - 30, a.y));
+    }
+  }
+
+  function drawAnimal(a) {
+    const x = a.x, y = a.y;
+    const f = a.facing;
+    const bob = (a.state === 'wander' || a.state === 'chased') ? Math.sin(a.walkPhase)*1.5 : 0;
+
+    // skugga
+    ctx.fillStyle = 'rgba(0,0,0,0.2)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + 5, 10, 2, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    if (a.state === 'sleep') {
+      // sovande katt — hoprullad
+      ctx.fillStyle = a.color;
+      ctx.beginPath();
+      ctx.ellipse(x, y, 12, 6, 0, 0, Math.PI*2);
+      ctx.fill();
+      // huvud lutat
+      ctx.beginPath();
+      ctx.arc(x - 8*f, y - 1, 4, 0, Math.PI*2);
+      ctx.fill();
+      // svans hoprullad
+      ctx.fillStyle = a.color;
+      ctx.fillRect(x + 8*f, y - 2, 5, 2);
+      // Z
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 10px Georgia';
+      ctx.textAlign = 'center';
+      const zPhase = (state.time * 0.06) % 3;
+      ctx.globalAlpha = 1 - (zPhase/3);
+      ctx.fillText('z', x - 8*f, y - 8 - zPhase*4);
+      ctx.globalAlpha = 1;
+      return;
+    }
+
+    if (a.state === 'sit') {
+      // sittande katt
+      ctx.fillStyle = a.color;
+      // bakkropp
+      ctx.fillRect(x - 6, y - 4, 10, 8);
+      // bröst
+      ctx.fillRect(x + 3*f, y - 6, 5, 10);
+      // svans bakom
+      ctx.fillRect(x - 9*f, y - 2, 6, 2);
+      // ben fram
+      ctx.fillRect(x + 4*f, y + 4, 2, 2);
+      ctx.fillRect(x + 7*f, y + 4, 2, 2);
+      // huvud
+      ctx.fillRect(x + 4*f, y - 12, 8, 7);
+      // öron
+      ctx.beginPath();
+      ctx.moveTo(x + 4*f, y - 12);
+      ctx.lineTo(x + 5*f, y - 16);
+      ctx.lineTo(x + 7*f, y - 11);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x + 9*f, y - 11);
+      ctx.lineTo(x + 11*f, y - 16);
+      ctx.lineTo(x + 12*f, y - 12);
+      ctx.closePath();
+      ctx.fill();
+      // ögon
+      ctx.fillStyle = '#f4d050';
+      ctx.fillRect(x + 6*f, y - 9, 1, 1);
+      ctx.fillRect(x + 9*f, y - 9, 1, 1);
+      // mage
+      ctx.fillStyle = a.bellyColor;
+      ctx.fillRect(x - 4, y + 1, 6, 3);
+      return;
+    }
+
+    // wander or chased — stående 4-bent katt
+    const legSwing = Math.sin(a.walkPhase) * 2;
+    ctx.fillStyle = a.color;
+    // kropp
+    ctx.fillRect(x - 8, y - 4 + bob, 16, 6);
+    // ben (4st)
+    ctx.fillRect(x - 6, y + 2, 2, 4 + legSwing);
+    ctx.fillRect(x + 4, y + 2, 2, 4 - legSwing);
+    ctx.fillRect(x - 2, y + 2, 2, 4 - legSwing);
+    ctx.fillRect(x + 6, y + 2, 2, 4 + legSwing);
+    // svans
+    ctx.fillRect(x - 11*f, y - 6 + bob, 4*f, 2);
+    ctx.fillRect(x - 13*f, y - 9 + bob, 2*f, 4);
+    // huvud
+    ctx.fillRect(x + 6*f, y - 8 + bob, 8, 7);
+    // öron
+    ctx.beginPath();
+    ctx.moveTo(x + 6*f, y - 8 + bob);
+    ctx.lineTo(x + 7*f, y - 12 + bob);
+    ctx.lineTo(x + 9*f, y - 7 + bob);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + 11*f, y - 7 + bob);
+    ctx.lineTo(x + 13*f, y - 12 + bob);
+    ctx.lineTo(x + 14*f, y - 8 + bob);
+    ctx.closePath();
+    ctx.fill();
+    // ögon
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(x + 8*f, y - 5 + bob, 1, 1);
+    ctx.fillRect(x + 11*f, y - 5 + bob, 1, 1);
+    // mage
+    ctx.fillStyle = a.bellyColor;
+    ctx.fillRect(x - 5, y - 1 + bob, 10, 2);
+
+    if (a.state === 'chased') {
+      ctx.fillStyle = '#ffff80';
+      ctx.font = 'bold 12px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillText('!', x, y - 15);
+    }
+  }
+
+  // ---------- Pyramid ----------
+  const PYR_BASE_X = 900;
+  const PYR_BASE_Y = 580;
+  const PYR_BLOCK_W = 28;
+  const PYR_BLOCK_H = 18;
+  const PYR_ROWS = 10;
+
+  function pyramidBlockPos(idx) {
+    let n = idx;
+    for (let row = 0; row < PYR_ROWS; row++) {
+      const inRow = PYR_ROWS - row;
+      if (n < inRow) {
+        const rowWidth = inRow * PYR_BLOCK_W;
+        const startX = PYR_BASE_X - rowWidth/2;
+        return {
+          x: startX + n * PYR_BLOCK_W + PYR_BLOCK_W/2,
+          y: PYR_BASE_Y - row * PYR_BLOCK_H - PYR_BLOCK_H/2,
+        };
+      }
+      n -= inRow;
+    }
+    return null;
+  }
+  state.blocksTarget = (function(){
+    let total = 0;
+    for (let r = 0; r < PYR_ROWS; r++) total += (PYR_ROWS - r);
+    return total;
+  })();
+
+  const quarry = { x: 120, y: 540, w: 200, h: 115 };
+
+  // ---------- Rest zones (where slackers go to escape work) ----------
+  const REST_ZONES = [
+    { x: 75,   y: 670, name: 'left',   facing: 1,  onSphinx: false },
+    { x: 1200, y: 680, name: 'right',  facing: -1, onSphinx: false },
+    { x: 600,  y: 695, name: 'front',  facing: 1,  onSphinx: false },
+    { x: 380,  y: 410, name: 'sphinx', facing: 1,  onSphinx: true  }, // top of sphinx body
+  ];
+  function pickRestZone() {
+    return REST_ZONES[Math.floor(Math.random() * REST_ZONES.length)];
+  }
+  // Hitta en ledig position vid en zon — undvik att hamna ovanpå andra som vilar där
+  function pickRestSpot(zone, w) {
+    const spread = zone.onSphinx ? 50 : 70;
+    const vSpread = zone.onSphinx ? 6 : 22;
+    // Clamp i samma intervall som arbetar-AI:n tillåter — annars går de mot ett ouppnåligt mål
+    const minY = zone.onSphinx ? 380 : 490;
+    const maxY = H - 30;
+    const minX = 40, maxX = W - 40;
+    for (let tries = 0; tries < 6; tries++) {
+      const ox = (Math.random() - 0.5) * spread * 2;
+      const oy = (Math.random() - 0.5) * vSpread * 2;
+      const tx = Math.max(minX, Math.min(maxX, zone.x + ox));
+      const ty = Math.max(minY, Math.min(maxY, zone.y + oy));
+      // kolla om någon annan vilo-arbetare står inom 22px
+      let clash = false;
+      for (const other of workers) {
+        if (other === w) continue;
+        if (other.state !== 'lazy') continue;
+        if (!other.atRestZone) continue;
+        const d = Math.hypot(other.x - tx, other.y - ty);
+        if (d < 22) { clash = true; break; }
+      }
+      if (!clash) return { x: tx, y: ty };
+    }
+    // fallback om allt kolliderar
+    return {
+      x: Math.max(minX, Math.min(maxX, zone.x + (Math.random() - 0.5) * spread)),
+      y: Math.max(minY, Math.min(maxY, zone.y)),
+    };
+  }
+
+  // ---------- Day/Night helpers ----------
+  // dayTime: 0=midnatt, 0.25=gryning, 0.5=middag, 0.75=skymning
+  function getDayPhase() {
+    const t = state.dayTime;
+    // returnerar 0..1 där 1 = full dag, 0 = full natt
+    // smooth via cos
+    return Math.max(0, Math.cos((t - 0.5) * Math.PI * 2) * 0.5 + 0.5);
+  }
+  function getSkyColors() {
+    const t = state.dayTime;
+    const d = getDayPhase(); // 0 natt → 1 dag
+    // gryning/skymning rödaktig
+    const duskWeight = Math.max(0, 1 - Math.abs(t - 0.25)*8) + Math.max(0, 1 - Math.abs(t - 0.75)*8);
+    const dusk = Math.min(1, duskWeight);
+
+    // Lerp mellan natt-, gryning- och dag-färger
+    const nightTop = [12, 18, 50];
+    const nightBot = [40, 30, 70];
+    const dayTop = [244, 184, 96];
+    const dayBot = [216, 160, 88];
+    const duskTop = [240, 110, 70];
+    const duskBot = [180, 80, 90];
+
+    function mix(a, b, t) { return [a[0]+(b[0]-a[0])*t, a[1]+(b[1]-a[1])*t, a[2]+(b[2]-a[2])*t]; }
+    function rgb(c) { return `rgb(${Math.round(c[0])},${Math.round(c[1])},${Math.round(c[2])})`; }
+
+    const baseTop = mix(nightTop, dayTop, d);
+    const baseBot = mix(nightBot, dayBot, d);
+    const top = mix(baseTop, duskTop, dusk*0.65);
+    const bot = mix(baseBot, duskBot, dusk*0.65);
+    return { top: rgb(top), bot: rgb(bot), day: d, dusk };
+  }
+
+  // ---------- Whip ----------
+  function tryWhip() {
+    if (!state.running || state.whipCooldown > 0) return;
+    state.whipCooldown = 18;
+    pharaoh.whipPhase = 1.0;
+    playWhip();
+
+    const reach = 110;
+    let hit = false;
+    for (const w of workers) {
+      if (w.enteringFrom) continue;
+      if (w.state === 'downed') continue;
+      const dx = w.x - pharaoh.x;
+      const dy = w.y - pharaoh.y;
+      const dist = Math.hypot(dx, dy);
+      if (dist < reach && Math.sign(dx) === pharaoh.facing) {
+        hit = true;
+        const wasSleeping = w.state === 'lazy';
+        const wasLazy = wasSleeping || w.energy < 30;
+        w.energy = Math.min(100, w.energy + 55);
+        w.scared = 1.0;
+
+        // Vakna upp! Lat → arbeta direkt, inte vänta på nästa frame
+        if (wasSleeping) {
+          w.state = 'idle';
+          w.energy = 100;       // full energi efter pisk-väckning
+          w.wakeBoost = 240;    // ~4 sek skydd mot att somna direkt igen
+          w.target = null;
+          w.carrying = false;
+          w.restZone = null;
+          w.restSpot = null;
+          w.atRestZone = false;
+          w.lazyTarget = null;
+          spawnFloater(w.x, w.y - 30, 'WAKE UP!', '#ffe070');
+          // små "väck-stjärnor" kring huvudet
+          for (let i = 0; i < 6; i++) {
+            state.cracks.push({
+              x: w.x + (Math.random()-0.5)*16,
+              y: w.y - 20 + (Math.random()-0.5)*8,
+              vx: (Math.random()-0.5)*2,
+              vy: -Math.random()*1.5 - 0.5,
+              life: 1.0,
+              color: '#fff080',
+              grav: 0.05,
+            });
+          }
+        }
+
+        // HP-skada: liten på lat (förtjänat), större på flitig (orättvist)
+        const dmg = wasLazy ? 8 : 22;
+        w.hp -= dmg;
+
+        if (wasLazy && !wasSleeping) {
+          state.score += 5;
+          spawnFloater(w.x, w.y - 30, '+WORK!', '#ffe070');
+        } else if (!wasLazy) {
+          spawnFloater(w.x, w.y - 30, 'OW!', '#ff8888');
+        }
+
+        // Brutal blod-spray (mycket fler partiklar)
+        const sprayCount = wasLazy ? 14 : 28;
+        for (let i = 0; i < sprayCount; i++) {
+          const a = Math.random() * Math.PI * 2;
+          const s = 1.5 + Math.random()*4.5;
+          state.cracks.push({
+            x: w.x + (Math.random()-0.5)*12,
+            y: w.y - 8 + Math.random()*12,
+            vx: Math.cos(a) * s,
+            vy: -Math.abs(Math.sin(a)) * s - 1,
+            life: 1.0,
+            color: Math.random() < 0.6 ? '#a01818' : '#5a0606',
+            grav: 0.22,
+          });
+        }
+        // Tunga droppar som studsar längre
+        for (let i = 0; i < (wasLazy ? 4 : 9); i++) {
+          state.cracks.push({
+            x: w.x + (Math.random()-0.5)*16,
+            y: w.y - 4 + Math.random()*6,
+            vx: (Math.random()-0.5)*6,
+            vy: -Math.random()*4 - 2,
+            life: 1.2,
+            color: '#c01010',
+            grav: 0.28,
+          });
+        }
+        // Bestående blod-dekaler på marken kring offret
+        const decalCount = wasLazy ? 3 : 7;
+        for (let i = 0; i < decalCount; i++) {
+          state.bloodSplatters.push({
+            x: w.x + (Math.random()-0.5)*40,
+            y: w.y + 8 + (Math.random()-0.5)*10,
+            r: 3 + Math.random()*7,
+            life: 1.0,
+            decay: 0.0014, // ~12 sek
+            color: Math.random() < 0.5 ? '#7a0a0a' : '#5a0606',
+            blobs: 3 + Math.floor(Math.random()*4),
+            seed: Math.random()*1000,
+          });
+        }
+
+        if (w.hp <= 0) downWorker(w);
+      }
+    }
+    if (!hit) {
+      spawnFloater(pharaoh.x + pharaoh.facing*60, pharaoh.y - 20, '*CRACK*', '#ffffff');
+    }
+  }
+
+  function downWorker(w) {
+    // Arbetaren faller — ligger blodig och stilla en stund
+    w.state = 'downed';
+    w.downedTimer = 7 * 60 + Math.floor(Math.random()*120); // 7-9 sekunder
+    w.downedFacing = Math.random() < 0.5 ? -1 : 1;
+    w.bloodPool = 0;
+    w.carrying = false;
+    w.target = null;
+    w.vx = 0; w.vy = 0;
+
+    // Brutal blod-fontän
+    for (let i = 0; i < 38; i++) {
+      const angle = Math.random() * Math.PI * 2;
+      const speed = 1 + Math.random()*4;
+      state.cracks.push({
+        x: w.x + (Math.random()-0.5)*18,
+        y: w.y + Math.random()*8,
+        vx: Math.cos(angle) * speed,
+        vy: -Math.abs(Math.sin(angle)) * speed - 1.5,
+        life: 1.0,
+        color: Math.random() < 0.6 ? '#a00808' : '#5a0404',
+        grav: 0.22,
+      });
+    }
+    // Tunga droppar som studsar ut
+    for (let i = 0; i < 12; i++) {
+      state.cracks.push({
+        x: w.x + (Math.random()-0.5)*30,
+        y: w.y - 4 + Math.random()*4,
+        vx: (Math.random()-0.5)*7,
+        vy: -Math.random()*5 - 2,
+        life: 1.2,
+        color: '#c01010',
+        grav: 0.28,
+      });
+    }
+    // Stor blodpöl på marken där de föll
+    for (let i = 0; i < 18; i++) {
+      state.bloodSplatters.push({
+        x: w.x + (Math.random()-0.5)*70,
+        y: w.y + 10 + (Math.random()-0.5)*16,
+        r: 5 + Math.random()*12,
+        life: 1.0,
+        decay: 0.0006, // ~28 sek
+        color: Math.random() < 0.5 ? '#5a0606' : '#380404',
+        blobs: 4 + Math.floor(Math.random()*5),
+        seed: Math.random()*1000,
+      });
+    }
+    spawnFloater(w.x, w.y - 30, 'DOWN!', '#cc2020');
+    triggerKillZoom(w);
+  }
+
+  function spawnFloater(x, y, text, color) {
+    state.floaters.push({ x, y, text, color, life: 1.0, vy: -0.6 });
+  }
+
+  // ---------- Update ----------
+  function update() {
+    if (!state.running) return;
+    state.time++;
+    state.dayTime = (state.dayTime + 1 / DAY_LENGTH) % 1;
+    state.whipCooldown = Math.max(0, state.whipCooldown - 1);
+    pharaoh.whipPhase = Math.max(0, pharaoh.whipPhase - 0.08);
+
+    // Pharaoh movement
+    let dx = 0, dy = 0;
+    if (keys['a'] || keys['arrowleft']) dx -= 1;
+    if (keys['d'] || keys['arrowright']) dx += 1;
+    if (keys['w'] || keys['arrowup']) dy -= 1;
+    if (keys['s'] || keys['arrowdown']) dy += 1;
+    const mag = Math.hypot(dx, dy);
+    if (mag > 0) {
+      pharaoh.vx = (dx/mag) * pharaoh.speed;
+      pharaoh.vy = (dy/mag) * pharaoh.speed;
+      pharaoh.walkPhase += 0.25;
+      if (dx !== 0) pharaoh.facing = Math.sign(dx);
+    } else {
+      pharaoh.vx *= 0.6; pharaoh.vy *= 0.6;
+      pharaoh.walkPhase *= 0.9;
+    }
+    pharaoh.x = Math.max(40, Math.min(W-40, pharaoh.x + pharaoh.vx));
+    pharaoh.y = Math.max(H*0.55, Math.min(H-30, pharaoh.y + pharaoh.vy));
+
+    const dayPhase = getDayPhase(); // 0=natt 1=dag
+    const energyDrain = 0.10 + (1 - dayPhase) * 0.08; // något tröttare nattetid (mildare)
+
+    // Workers AI
+    for (const w of workers) {
+      // entering from edge → spring in mot bygget
+      if (w.enteringFrom) {
+        w.x += 1.6;
+        w.walkPhase += 0.25;
+        if (w.x > 180) w.enteringFrom = false;
+        continue;
+      }
+
+      // Stupad → ligg still tills timern går ut
+      if (w.state === 'downed') {
+        w.downedTimer--;
+        w.bloodPool = Math.min(1, w.bloodPool + 0.012);
+        if (w.downedTimer <= 0) {
+          // Res sig upp, hostar fram en kommentar
+          w.state = 'idle';
+          w.hp = 70;
+          w.energy = 50;
+          w.scared = 0.4;
+          spawnFloater(w.x, w.y - 30, 'Ugh...', '#ffd0a0');
+        }
+        continue;
+      }
+
+      w.scared = Math.max(0, w.scared - 0.04);
+
+      // Djupsömn — när de väl ligger ner och sover är de helt avstängda
+      // (ingen energi-drain, ingen vakning av faraos närhet — bara pisk väcker).
+      const inDeepSleep = w.state === 'lazy' && w.lazyAction === 'sleeping' && w.atRestZone;
+
+      if (w.wakeBoost > 0) {
+        w.wakeBoost--; // ingen energidränering under skyddstiden
+      } else if (!inDeepSleep) {
+        w.energy -= energyDrain + Math.random()*0.05;
+      }
+
+      // farao nära → liten energiboost (inte för sovande)
+      const dxp = pharaoh.x - w.x, dyp = pharaoh.y - w.y;
+      const distP = Math.hypot(dxp, dyp);
+      if (distP < 90 && !inDeepSleep) w.energy = Math.min(100, w.energy + 0.15);
+
+      if (w.energy <= 5 && w.state !== 'lazy') {
+        w.state = 'lazy';
+        // välj lat-beteende
+        const r = Math.random();
+        if (r < 0.30) w.lazyAction = 'sleeping';
+        else if (r < 0.55) w.lazyAction = 'playing_friend';
+        else if (r < 0.85) w.lazyAction = 'playing_animal'; // de gillar djur extra mycket
+        else w.lazyAction = 'dancing';
+        w.lazyTimer = 0;
+        w.lazyTarget = null;
+        w.restZone = pickRestZone();
+        // hindra att tjocka eller sängriddare hamnar på sphinx — bara sleepers och dansare där
+        if (w.restZone.onSphinx && (w.lazyAction === 'playing_animal')) {
+          w.restZone = REST_ZONES[Math.floor(Math.random()*3)]; // pick non-sphinx
+        }
+        w.restSpot = pickRestSpot(w.restZone, w);
+        w.atRestZone = false;
+        w.target = null;
+        w.carrying = false;
+      } else if (w.state === 'lazy' && w.energy > 25) {
+        w.state = 'idle';
+        w.lazyTarget = null;
+        w.restZone = null;
+        w.restSpot = null;
+        w.atRestZone = false;
+      }
+
+      if (w.state === 'lazy') {
+        w.lazyTimer++;
+
+        // Fas 1: gå till sin vilo-plats (bort från byggområdet)
+        if (!w.atRestZone && w.restSpot) {
+          const dx = w.restSpot.x - w.x;
+          const dy = w.restSpot.y - w.y;
+          const d = Math.hypot(dx, dy);
+          if (d < 14) {
+            w.atRestZone = true;
+            w.facing = w.restZone.facing;
+            // snappa exakt till spot för att undvika dubblar
+            w.x = w.restSpot.x;
+            w.y = w.restSpot.y;
+          } else {
+            // slö släpgång — uppgivet skuldra-hängande
+            const speed = 0.85 * (w.speedMul || 1);
+            w.x += (dx/d) * speed;
+            w.y += (dy/d) * speed;
+            w.walkPhase += 0.16;
+            if (dx !== 0) w.facing = Math.sign(dx);
+            // håll inom skärm — släpp y-min vid sphinx-zonen
+            const minY = (w.restZone && w.restZone.onSphinx) ? 380 : 490;
+            w.x = Math.max(40, Math.min(W - 40, w.x));
+            w.y = Math.max(minY, Math.min(H - 30, w.y));
+            continue;
+          }
+        }
+
+        // Fas 2: aktivitet vid zonen
+        if (w.lazyAction === 'sleeping') {
+          w.vx *= 0.7; w.vy *= 0.7;
+        } else if (w.lazyAction === 'playing_friend') {
+          // hitta en annan lat arbetare att leka med
+          if (!w.lazyTarget || (w.lazyTarget.state !== 'lazy')) {
+            w.lazyTarget = workers.find(o => o !== w && o.state === 'lazy' && o.lazyAction === 'playing_friend');
+          }
+          if (w.lazyTarget) {
+            const dx = w.lazyTarget.x - w.x, dy = w.lazyTarget.y - w.y;
+            const d = Math.hypot(dx, dy);
+            // jaga och cirkulera — men rör dig sakta, teleportera aldrig
+            if (d > 40) {
+              w.x += (dx/d) * 1.1;
+              w.y += (dy/d) * 1.1;
+              w.walkPhase += 0.25;
+              if (dx !== 0) w.facing = Math.sign(dx);
+            } else {
+              // glid mot en punkt som cirklar runt vännen
+              const orbit = w.lazyTimer * 0.04;
+              const tx = w.lazyTarget.x + Math.cos(orbit) * 30;
+              const ty = w.lazyTarget.y + Math.sin(orbit) * 14;
+              const odx = tx - w.x, ody = ty - w.y;
+              const od = Math.hypot(odx, ody);
+              if (od > 0.5) {
+                const step = Math.min(od, 1.2);
+                w.x += (odx/od) * step;
+                w.y += (ody/od) * step;
+              }
+              w.walkPhase += 0.2;
+              if (odx !== 0) w.facing = Math.sign(odx);
+            }
+          } else {
+            // ingen att leka med — strosa runt
+            if (Math.random() < 0.02) {
+              w.lazyTarget = { x: w.x + (Math.random()-0.5)*120, y: w.y + (Math.random()-0.5)*60 };
+            }
+            if (w.lazyTarget && w.lazyTarget.x !== undefined && !w.lazyTarget.state) {
+              const dx = w.lazyTarget.x - w.x, dy = w.lazyTarget.y - w.y;
+              const d = Math.hypot(dx, dy);
+              if (d > 4) { w.x += (dx/d)*0.6; w.y += (dy/d)*0.6; w.walkPhase += 0.15; if (dx!==0) w.facing=Math.sign(dx); }
+              else { w.lazyTarget = null; }
+            }
+          }
+        } else if (w.lazyAction === 'playing_animal') {
+          // hitta närmaste katt (gärna en som inte är skrämd)
+          if (!w.lazyTarget || w.lazyTarget._isAnimal === undefined) {
+            let nearest = null, ndist = Infinity;
+            for (const a of state.animals) {
+              if (a.state === 'chased') continue;
+              const d = Math.hypot(a.x - w.x, a.y - w.y);
+              if (d < ndist) { ndist = d; nearest = a; }
+            }
+            if (nearest) { nearest._isAnimal = true; w.lazyTarget = nearest; }
+          }
+          if (w.lazyTarget) {
+            const dx = w.lazyTarget.x - w.x, dy = w.lazyTarget.y - w.y;
+            const d = Math.hypot(dx, dy);
+            if (d > 26) {
+              // smyger fram (långsamt så katten inte skräms)
+              w.x += (dx/d) * 0.7;
+              w.y += (dy/d) * 0.7;
+              w.walkPhase += 0.18;
+              if (dx !== 0) w.facing = Math.sign(dx);
+            } else {
+              // står bredvid och kelar
+              w.walkPhase += 0.04;
+              if (dx !== 0) w.facing = Math.sign(dx);
+              // katten lugnar sig — sitter och spinner
+              if (w.lazyTarget.state === 'wander') {
+                w.lazyTarget.state = 'sit';
+                w.lazyTarget.stateTimer = 300;
+              }
+              // hjärtan svävar uppåt mellan dem
+              if (Math.random() < 0.04) {
+                state.cracks.push({
+                  x: (w.x + w.lazyTarget.x)/2 + (Math.random()-0.5)*10,
+                  y: Math.min(w.y, w.lazyTarget.y) - 12,
+                  vx: (Math.random()-0.5)*0.3,
+                  vy: -0.6 - Math.random()*0.3,
+                  life: 1.0,
+                  color: '#ff80a0',
+                  grav: -0.015,
+                  heart: true,
+                });
+              }
+            }
+          }
+        } else if (w.lazyAction === 'dancing') {
+          // Hitta en annan dansare på samma zon → dansa i takt och vänd dem mot varann
+          let partner = null;
+          for (const other of workers) {
+            if (other === w) continue;
+            if (other.state !== 'lazy' || other.lazyAction !== 'dancing') continue;
+            if (!other.atRestZone) continue;
+            if (other.restZone !== w.restZone) continue;
+            const od = Math.hypot(other.x - w.x, other.y - w.y);
+            if (od < 80) { partner = other; break; }
+          }
+          if (partner) {
+            // Vänd mot kompisen
+            if (partner.x > w.x + 1) w.facing = 1;
+            else if (partner.x < w.x - 1) w.facing = -1;
+            // Synkad rytm baserat på världstiden — grupp-dans
+            w.walkPhase = state.time * 0.35;
+          } else {
+            w.walkPhase += 0.35;
+          }
+          w.vx *= 0.5; w.vy *= 0.5;
+        }
+        // håll inom skärm (sphinx-zonen tillåter högre upp)
+        const minY = (w.restZone && w.restZone.onSphinx) ? 380 : 490;
+        w.x = Math.max(40, Math.min(W - 40, w.x));
+        w.y = Math.max(minY, Math.min(H - 30, w.y));
+
+        // Hård pin: sovande och sphinx-sittare ska vara helt stilla
+        const pinHere = w.atRestZone && w.restSpot &&
+          (w.lazyAction === 'sleeping' || (w.restZone && w.restZone.onSphinx));
+        if (pinHere) {
+          w.x = w.restSpot.x;
+          w.y = w.restSpot.y;
+          w.vx = 0;
+          w.vy = 0;
+        }
+      } else {
+        if (!w.carrying) {
+          // Plockar upp en sten — står still och böjer sig
+          if (w.pickupTimer > 0) {
+            w.pickupTimer--;
+            if (w.pickupTimer === 0) {
+              w.carrying = true;
+              w.target = null;
+              // damm-partiklar när stenen lyfts
+              for (let i = 0; i < 5; i++) {
+                state.cracks.push({
+                  x: w.x + (Math.random()-0.5)*16,
+                  y: w.y + 2 + Math.random()*4,
+                  vx: (Math.random()-0.5)*1.5,
+                  vy: -Math.random()*1.2 - 0.5,
+                  life: 0.8,
+                  color: '#c89870',
+                  grav: 0.1,
+                });
+              }
+            }
+          } else {
+            // Sikta mot framsidan av stenhögen, lite olika varje gång
+            if (!w.target) {
+              const baseY = quarry.y + quarry.h - 2;
+              w.target = {
+                x: quarry.x + 10 + Math.random()*(quarry.w - 20),
+                y: baseY + 4 + Math.random()*8,
+              };
+            }
+            moveWorkerToward(w, w.target.x, w.target.y);
+            if (dist2(w.x, w.y, w.target.x, w.target.y) < 12) {
+              w.pickupTimer = 36; // ~0.6s böjs ner
+            }
+          }
+        } else {
+          const next = pyramidBlockPos(state.blocksPlaced);
+          if (!next) { w.carrying = false; continue; }
+          const tx = next.x + (w.x < next.x ? -20 : 20);
+          const ty = next.y + 10;
+          moveWorkerToward(w, tx, ty);
+          if (dist2(w.x, w.y, tx, ty) < 14) {
+            state.blocksPlaced++;
+            state.score += 10;
+            w.carrying = false;
+            spawnFloater(next.x, next.y - 10, '+1', '#fff0a0');
+            for (let i = 0; i < 6; i++) {
+              state.cracks.push({
+                x: next.x + (Math.random()-0.5)*20,
+                y: next.y + 5,
+                vx: (Math.random()-0.5)*2,
+                vy: -Math.random()*2,
+                life: 1.0,
+                color: '#d4a070',
+                grav: 0.15,
+              });
+            }
+            if (state.blocksPlaced >= state.blocksTarget) {
+              state.running = false;
+              state.won = true;
+              setTimeout(showWin, 500);
+            }
+          }
+        }
+      }
+    }
+
+    // Worker-repulsion — undvik att de står inne i varandra
+    // (sovande är pinnade och hoppas över; dansande / playing-friend tillåts vara nära partner)
+    const MIN_SEP = 20;
+    for (let i = 0; i < workers.length; i++) {
+      const w = workers[i];
+      if (w.enteringFrom || w.state === 'downed') continue;
+      // sovande håller sig pinned, men de KAN bli puttade undan
+      // av andra (vi gör pinen igen i sleep-blocket)
+      for (let j = i + 1; j < workers.length; j++) {
+        const o = workers[j];
+        if (o.enteringFrom || o.state === 'downed') continue;
+        const dx = w.x - o.x;
+        const dy = w.y - o.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 0.01 && d < MIN_SEP) {
+          const push = (MIN_SEP - d) / MIN_SEP * 0.55;
+          const nx = dx / d, ny = dy / d;
+          // sovande pin:as om — så skippa push på dem
+          const wSleep = w.atRestZone && w.lazyAction === 'sleeping';
+          const oSleep = o.atRestZone && o.lazyAction === 'sleeping';
+          if (!wSleep) { w.x += nx * push; w.y += ny * push; }
+          if (!oSleep) { o.x -= nx * push; o.y -= ny * push; }
+        }
+      }
+      // Pinen kör en gång till för säkerhet (sovande + sphinx-sittare)
+      if (w.atRestZone && w.restSpot &&
+          (w.lazyAction === 'sleeping' || (w.restZone && w.restZone.onSphinx))) {
+        w.x = w.restSpot.x; w.y = w.restSpot.y;
+      }
+    }
+
+    // Animals
+    for (const a of state.animals) updateAnimal(a);
+
+    // Daytime birds — spawn små flockar då och då när det är ljust
+    if (dayPhase > 0.4 && state.birds.length < 18 && Math.random() < 0.006) {
+      const fromLeft = Math.random() < 0.5;
+      const baseY = 70 + Math.random() * 180;
+      const speed = (0.4 + Math.random() * 0.5) * (fromLeft ? 1 : -1);
+      const flockSize = 3 + Math.floor(Math.random() * 4);
+      for (let i = 0; i < flockSize; i++) {
+        state.birds.push({
+          x: fromLeft ? -20 - i*16 : W + 20 + i*16,
+          y: baseY + (i % 2 === 0 ? -i*4 : i*4),
+          vx: speed,
+          flap: Math.random() * Math.PI * 2,
+          flapRate: 0.18 + Math.random()*0.1,
+          size: 4 + Math.random()*2,
+        });
+      }
+    }
+    for (const b of state.birds) {
+      b.x += b.vx;
+      // smooth upp/ner-glid
+      b.y += Math.sin(b.flap*0.3) * 0.15;
+      b.flap += b.flapRate;
+    }
+    state.birds = state.birds.filter(b => b.x > -50 && b.x < W + 50);
+
+    // Crows over downed workers (if any)
+    const downedCount = workers.filter(w => w.state === 'downed').length;
+    if (downedCount > 0 && Math.random() < 0.012 && state.crows.length < 3) {
+      state.crows.push({
+        x: Math.random() < 0.5 ? -20 : W+20,
+        y: 80 + Math.random()*120,
+        vx: (Math.random()<0.5 ? 1 : -1) * (0.6 + Math.random()*0.5),
+        flap: Math.random()*Math.PI*2,
+      });
+    }
+    for (const c of state.crows) {
+      c.x += c.vx;
+      c.flap += 0.3;
+    }
+    state.crows = state.crows.filter(c => c.x > -40 && c.x < W+40);
+
+    // blood splatters decay slowly
+    for (const s of state.bloodSplatters) s.life -= s.decay;
+    state.bloodSplatters = state.bloodSplatters.filter(s => s.life > 0);
+
+    // Chat bubbles — uppdatera och rensa
+    for (const b of state.chatBubbles) b.life -= b.decay;
+    state.chatBubbles = state.chatBubbles.filter(b =>
+      b.life > 0 && workers.indexOf(b.worker) !== -1 && b.worker.state === 'lazy'
+    );
+
+    // Spontant prat — varje sekund hittar vi en kandidat och spawnar ev. en bubbla
+    if (state.time % 50 === 0) {
+      // välj en slumpad lat-arbetare som är på sin vilo-zon, ej sovande
+      const chatters = workers.filter(w =>
+        w.state === 'lazy' && w.atRestZone &&
+        w.lazyAction !== 'sleeping' && !w.enteringFrom
+      );
+      if (chatters.length > 0) {
+        const w = chatters[Math.floor(Math.random() * chatters.length)];
+        // Hitta en granne i samma zon
+        let partner = null;
+        for (const o of workers) {
+          if (o === w) continue;
+          if (o.state !== 'lazy' || !o.atRestZone) continue;
+          if (o.lazyAction === 'sleeping') continue;
+          if (o.restZone !== w.restZone) continue;
+          const d = Math.hypot(o.x - w.x, o.y - w.y);
+          if (d < 110) { partner = o; break; }
+        }
+        if (partner && Math.random() < 0.6) {
+          spawnChatBubble(w);
+          // svaras ofta inom ~1 sek
+          if (Math.random() < 0.7) {
+            setTimeout(() => {
+              if (state.running && partner.state === 'lazy' && partner.atRestZone) {
+                spawnChatBubble(partner);
+              }
+            }, 700 + Math.random()*900);
+          }
+        }
+      }
+    }
+
+    // particles
+    for (const c of state.cracks) {
+      c.x += c.vx; c.y += c.vy;
+      c.vy += c.grav || 0.15;
+      c.life -= 0.025;
+    }
+    state.cracks = state.cracks.filter(c => c.life > 0);
+    for (const f of state.floaters) {
+      f.y += f.vy;
+      f.life -= 0.018;
+    }
+    state.floaters = state.floaters.filter(f => f.life > 0);
+
+    // HUD
+    pyramidFill.style.width = (100 * state.blocksPlaced / state.blocksTarget) + '%';
+    scoreEl.textContent = 'Stones: ' + state.blocksPlaced + ' / ' + state.blocksTarget;
+    const standing = workers.filter(w => w.state !== 'downed' && !w.enteringFrom).length;
+    workersEl.textContent = 'Workers: ' + standing + '/' + TOTAL_WORKERS;
+    timeLabel.textContent = timeOfDayLabel();
+  }
+
+  function timeOfDayLabel() {
+    const t = state.dayTime;
+    if (t < 0.1 || t > 0.9) return '🌙 Midnight';
+    if (t < 0.22) return '🌅 Dawn';
+    if (t < 0.4) return '☀ Morning';
+    if (t < 0.55) return '☀ Noon';
+    if (t < 0.72) return '☀ Afternoon';
+    if (t < 0.82) return '🌇 Dusk';
+    return '🌙 Night';
+  }
+
+  function moveWorkerToward(w, tx, ty) {
+    const dx = tx - w.x, dy = ty - w.y;
+    const d = Math.hypot(dx, dy);
+    if (d < 0.001) return;
+    // baseline 1.0, en aning snabbare vid full energi, lite extra brådska kort efter pisk
+    const speed = (0.9 + (w.energy/100) * 0.6 + (w.scared * 0.5)) * (w.speedMul || 1);
+    w.x += (dx/d) * speed;
+    w.y += (dy/d) * speed;
+    w.walkPhase += 0.2;
+    if (dx !== 0) w.facing = Math.sign(dx);
+  }
+
+  function dist2(x1,y1,x2,y2){ const dx=x1-x2,dy=y1-y2; return Math.hypot(dx,dy); }
+
+  // ---------- Drawing ----------
+  function draw() {
+    const sky = getSkyColors();
+    const dayPhase = sky.day;
+
+    // Sky gradient
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0, sky.top);
+    grad.addColorStop(0.65, sky.bot);
+    grad.addColorStop(1, sky.bot);
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+
+    // Stars (synliga på natten)
+    const starAlpha = Math.max(0, 1 - dayPhase * 1.5);
+    if (starAlpha > 0.05) {
+      for (const s of state.stars) {
+        const tw = 0.6 + Math.sin(state.time*0.05 + s.twinkle) * 0.4;
+        ctx.fillStyle = `rgba(255,255,220,${starAlpha * tw})`;
+        ctx.fillRect(s.x, s.y, s.size, s.size);
+      }
+    }
+
+    // Sun & Moon (rör sig i båge över himlen)
+    drawCelestials(dayPhase);
+
+    // ----- Slow-mo kill-cam zoom på offret -----
+    const zooming = inKillZoom();
+    const kz = killZoomState();
+    ctx.save();
+    if (zooming) {
+      const zoom = kz.scale;
+      const visW = W / zoom;
+      const visH = H / zoom;
+      const cx = Math.max(visW/2, Math.min(W - visW/2, killZoom.victimX));
+      const cy = Math.max(visH/2, Math.min(H - visH/2, killZoom.victimY));
+      // skakning på impact + under hold
+      let shakeAmt = 0;
+      if (kz.phase === 'in') shakeAmt = Math.pow((kz.scale - 1) / 2.2, 2) * 18;
+      else if (kz.phase === 'hold') shakeAmt = 12;
+      else if (kz.phase === 'out') shakeAmt = 6 * (1 - (kz.scale - 1) / 2.2);
+      const t = frameCounter * 0.8;
+      const shx = Math.sin(t * 1.5) * shakeAmt;
+      const shy = Math.cos(t * 1.9) * shakeAmt * 0.7;
+      ctx.translate(W/2 + shx, H/2 + shy);
+      ctx.scale(zoom, zoom);
+      ctx.translate(-cx, -cy);
+    }
+
+    // Distant dunes
+    drawDunes(dayPhase);
+
+    // Background pyramids (base sits on/in dunes — sand foreground covers the foot)
+    drawSmallPyramid(1010, 500, 110, '#c89058', dayPhase);
+    drawSmallPyramid(1170, 510, 80,  '#b88048', dayPhase);
+    drawSmallPyramid(130,  510, 95,  '#c89058', dayPhase);
+
+    // Sphinx
+    drawSphinx(380, 480, dayPhase);
+
+    // Sand foreground
+    const sandColor = mixHex('#e8c070', '#3a2860', 1 - dayPhase);
+    ctx.fillStyle = sandColor;
+    ctx.fillRect(0, H*0.62, W, H*0.38);
+    ctx.fillStyle = 'rgba(120,80,40,0.18)';
+    for (let i = 0; i < 30; i++) {
+      const sx = (i * 73) % W;
+      const sy = H*0.65 + (i * 41) % (H*0.3);
+      ctx.fillRect(sx, sy, 8, 2);
+    }
+
+    // Bestående blod på sanden (under strukturer och arbetare)
+    drawBloodSplatters();
+
+    // Eldar/facklor som tänds på natten
+    if (dayPhase < 0.6) drawTorches(dayPhase);
+
+    // Quarry
+    drawQuarry();
+
+    // Pyramid
+    drawBigPyramid();
+
+    // Workers + pharaoh + animals sorted by y
+    const entities = [
+      ...workers.map(w => ({type:'w', obj:w, y:w.y + (w.state==='downed'?10:0)})),
+      ...state.animals.map(a => ({type:'a', obj:a, y:a.y})),
+      {type:'p', obj:pharaoh, y:pharaoh.y},
+    ];
+    entities.sort((a,b) => a.y - b.y);
+    for (const e of entities) {
+      if (e.type === 'w') drawWorker(e.obj);
+      else if (e.type === 'a') drawAnimal(e.obj);
+      else drawPharaoh(e.obj);
+    }
+
+    // Pratbubblor över de som har en
+    for (const b of state.chatBubbles) drawChatBubble(b);
+
+    // Birds (i bakgrunden, ovanför moln/dyner)
+    for (const b of state.birds) drawBird(b);
+
+    // Crows
+    for (const c of state.crows) drawCrow(c);
+
+    // Particles
+    for (const c of state.cracks) {
+      const col = c.color
+        ? `rgba(${hexToRgb(c.color)},${c.life})`
+        : `rgba(200,160,100,${c.life})`;
+      ctx.fillStyle = col;
+      if (c.heart) {
+        // litet pixel-hjärta
+        const s = 1.5 + (1 - c.life) * 1.2;
+        ctx.beginPath();
+        ctx.arc(c.x - s*0.7, c.y - s*0.3, s, 0, Math.PI*2);
+        ctx.arc(c.x + s*0.7, c.y - s*0.3, s, 0, Math.PI*2);
+        ctx.fill();
+        ctx.beginPath();
+        ctx.moveTo(c.x - s*1.6, c.y + s*0.1);
+        ctx.lineTo(c.x + s*1.6, c.y + s*0.1);
+        ctx.lineTo(c.x, c.y + s*1.7);
+        ctx.closePath();
+        ctx.fill();
+      } else {
+        ctx.fillRect(c.x, c.y, 3, 3);
+      }
+    }
+
+    for (const f of state.floaters) {
+      ctx.globalAlpha = f.life;
+      ctx.fillStyle = f.color;
+      ctx.strokeStyle = 'rgba(0,0,0,0.5)';
+      ctx.lineWidth = 3;
+      ctx.font = 'bold 16px Georgia';
+      ctx.textAlign = 'center';
+      ctx.strokeText(f.text, f.x, f.y);
+      ctx.fillText(f.text, f.x, f.y);
+      ctx.globalAlpha = 1;
+    }
+
+    // Whip line
+    if (pharaoh.whipPhase > 0.4) {
+      ctx.strokeStyle = '#3a2010';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(pharaoh.x + pharaoh.facing*8, pharaoh.y - 18);
+      const tipX = pharaoh.x + pharaoh.facing * (40 + pharaoh.whipPhase*80);
+      const tipY = pharaoh.y - 10 + Math.sin(pharaoh.whipPhase*6)*10;
+      ctx.quadraticCurveTo(
+        pharaoh.x + pharaoh.facing*40,
+        pharaoh.y - 30 - pharaoh.whipPhase*15,
+        tipX, tipY
+      );
+      ctx.stroke();
+      if (pharaoh.whipPhase > 0.7) {
+        ctx.fillStyle = 'rgba(255,255,200,0.9)';
+        ctx.beginPath();
+        ctx.arc(tipX, tipY, 8, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    // ----- Stäng zoom-transformen -----
+    ctx.restore();
+
+    // Mörk vinjettering kring zoom-fokus + röd flash på impact
+    if (zooming) {
+      const v = kz.vignette;
+      const vignette = ctx.createRadialGradient(W/2, H/2, 80, W/2, H/2, Math.max(W, H)*0.7);
+      vignette.addColorStop(0, 'rgba(0,0,0,0)');
+      vignette.addColorStop(0.6, `rgba(20,0,0,${0.4 * v})`);
+      vignette.addColorStop(1, `rgba(0,0,0,${0.85 * v})`);
+      ctx.fillStyle = vignette;
+      ctx.fillRect(0, 0, W, H);
+
+      // Röd impact-flash första frames av hold-fasen
+      const elapsed = killZoom.total - killZoom.timer;
+      if (elapsed >= ZOOM_IN_FRAMES && elapsed < ZOOM_IN_FRAMES + 8) {
+        const flashT = 1 - (elapsed - ZOOM_IN_FRAMES) / 8;
+        ctx.fillStyle = `rgba(180,20,20,${flashT * 0.45})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+
+      // Blod-strimmor som kantöverlägg under hold
+      if (kz.phase === 'hold' || kz.phase === 'in') {
+        ctx.fillStyle = `rgba(120,8,8,${v * 0.5})`;
+        ctx.fillRect(0, 0, W, 28);
+        ctx.fillRect(0, H-28, W, 28);
+      }
+    }
+
+    // Natttint som overlay (mörkblå)
+    if (dayPhase < 0.95) {
+      ctx.fillStyle = `rgba(20,15,50,${(1-dayPhase)*0.35})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  // ---------- Comic panel drawing ----------
+  function drawComicPanel() {
+    const tNorm = (COMIC_PANEL_FRAMES - comicPanel.timer) / COMIC_PANEL_FRAMES;
+    let scale = 1, alpha = 1;
+    if (tNorm < 0.15) {
+      const s = tNorm / 0.15;
+      scale = 0.55 + s * 0.5; // pop in to 1.05
+      alpha = s;
+    } else if (tNorm < 0.22) {
+      scale = 1.05 - (tNorm - 0.15) / 0.07 * 0.05; // settle to 1.0
+    } else if (tNorm > 0.85) {
+      alpha = 1 - (tNorm - 0.85) / 0.15;
+    }
+
+    // Dim bakgrunden
+    ctx.fillStyle = `rgba(0,0,0,${0.62 * alpha})`;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.translate(W/2, H/2);
+    ctx.scale(scale, scale);
+
+    // Aktionslinjer radiella utåt
+    ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+    ctx.lineWidth = 3;
+    const lineCount = 28;
+    for (let i = 0; i < lineCount; i++) {
+      const a = (i / lineCount) * Math.PI * 2;
+      const r1 = 330 + Math.sin(i*1.3) * 20;
+      const r2 = 640;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a)*r1, Math.sin(a)*r1);
+      ctx.lineTo(Math.cos(a)*r2, Math.sin(a)*r2);
+      ctx.stroke();
+    }
+    // Tjockare aktionslinjer
+    ctx.strokeStyle = 'rgba(255,80,80,0.4)';
+    ctx.lineWidth = 6;
+    for (let i = 0; i < 8; i++) {
+      const a = (i / 8) * Math.PI * 2 + 0.2;
+      ctx.beginPath();
+      ctx.moveTo(Math.cos(a)*340, Math.sin(a)*340);
+      ctx.lineTo(Math.cos(a)*620, Math.sin(a)*620);
+      ctx.stroke();
+    }
+
+    // Panel rect — taggig serie-kant
+    const pw = 760, ph = 480;
+    const segs = 18;
+    const corners = [];
+    function pushEdge(fromX, fromY, toX, toY, n, baseSide) {
+      for (let i = 0; i <= n; i++) {
+        const t = i / n;
+        const x = fromX + (toX - fromX) * t;
+        const y = fromY + (toY - fromY) * t;
+        const j = (i === 0 || i === n) ? 0 : ((i % 2) ? 9 : -7);
+        if (baseSide === 'top')    corners.push({x, y: y + j});
+        if (baseSide === 'right')  corners.push({x: x + j, y});
+        if (baseSide === 'bottom') corners.push({x, y: y - j});
+        if (baseSide === 'left')   corners.push({x: x - j, y});
+      }
+    }
+    pushEdge(-pw/2, -ph/2,  pw/2, -ph/2, segs, 'top');
+    pushEdge( pw/2, -ph/2,  pw/2,  ph/2, segs, 'right');
+    pushEdge( pw/2,  ph/2, -pw/2,  ph/2, segs, 'bottom');
+    pushEdge(-pw/2,  ph/2, -pw/2, -ph/2, segs, 'left');
+
+    ctx.beginPath();
+    ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
+    ctx.closePath();
+
+    // Inre fyllning — mörkröd (Spawn-känsla)
+    const grad = ctx.createRadialGradient(0, 0, 50, 0, 0, 420);
+    grad.addColorStop(0, '#4a1a14');
+    grad.addColorStop(0.6, '#280808');
+    grad.addColorStop(1, '#0a0202');
+    ctx.fillStyle = grad;
+    ctx.fill();
+
+    // Svart taggig ram
+    ctx.lineWidth = 10;
+    ctx.strokeStyle = '#000';
+    ctx.stroke();
+    ctx.lineWidth = 3;
+    ctx.strokeStyle = '#3a0a0a';
+    ctx.stroke();
+
+    // Clip till panelen för innehåll
+    ctx.save();
+    ctx.beginPath();
+    ctx.moveTo(corners[0].x, corners[0].y);
+    for (let i = 1; i < corners.length; i++) ctx.lineTo(corners[i].x, corners[i].y);
+    ctx.closePath();
+    ctx.clip();
+
+    // Halftone-prickar (klassisk serie-effekt)
+    const dotSpacing = 14;
+    for (let py = -ph/2; py < ph/2; py += dotSpacing) {
+      for (let px = -pw/2; px < pw/2; px += dotSpacing) {
+        const ox = ((py / dotSpacing) | 0) % 2 ? dotSpacing/2 : 0;
+        const cx = px + ox;
+        const dist = Math.hypot(cx, py);
+        const fac = Math.min(1, dist / 260);
+        if (fac > 0.25) {
+          ctx.fillStyle = `rgba(0,0,0,${fac * 0.7})`;
+          ctx.beginPath();
+          ctx.arc(cx, py, 2.2 + fac * 2.4, 0, Math.PI*2);
+          ctx.fill();
+        }
+      }
+    }
+
+    // Stränga skuggig vinjettering vid kanterna (Spawn-skuggor)
+    ctx.fillStyle = 'rgba(0,0,0,0.55)';
+    ctx.beginPath();
+    ctx.moveTo(-pw/2, -ph/2);
+    ctx.lineTo(pw/2, -ph/2);
+    ctx.lineTo(pw/2 - 80, -ph/2 + 100);
+    ctx.lineTo(-pw/2 + 60, -ph/2 + 80);
+    ctx.closePath();
+    ctx.fill();
+
+    // Faraon stående på vänster sida, hotfull
+    drawComicPharaoh(-250, 220);
+
+    // Den fallna arbetaren — flyttad till höger så Faraon har plats
+    drawComicWorker(80, 90);
+
+    // Pisken som flyger från faraos hand till offrets bringa
+    drawComicWhip(-110, -100, 60, 30);
+
+    // Ropbubbla över offret
+    drawComicSpeech(220, -150, comicPanel.text);
+
+    ctx.restore(); // slut clip
+    ctx.restore(); // slut alpha/transform
+  }
+
+  function drawComicWorker(cx, cy) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    const skin = comicPanel.skin;
+    const skinShade = mixHex(skin, '#1a0a04', 0.35);
+    const ink = '#0a0408';
+    const blood = '#b00808';
+    const bloodDark = '#5a0404';
+    const kilt = comicPanel.kilt;
+    const kiltShade = mixHex(kilt, '#1a0a04', 0.35);
+
+    // Blodpöl
+    ctx.fillStyle = bloodDark;
+    ctx.beginPath();
+    ctx.ellipse(0, 100, 180, 36, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = blood;
+    ctx.beginPath();
+    ctx.ellipse(-10, 95, 150, 28, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#e02020';
+    ctx.beginPath();
+    ctx.ellipse(-20, 92, 90, 16, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Strålande blodspatter runt
+    const splatterRand = (n) => {
+      // deterministisk pseudo-random från seed
+      return Math.sin((comicPanel.splatterSeed + n) * 12.9898) * 43758.5453 % 1;
+    };
+    ctx.fillStyle = blood;
+    for (let i = 0; i < 22; i++) {
+      const a = i * 0.7 + (splatterRand(i)*1.5);
+      const r = 130 + (splatterRand(i+100)*120);
+      const px = Math.cos(a) * r;
+      const py = Math.sin(a) * r * 0.6 + 30;
+      const rad = 4 + Math.abs(splatterRand(i+200))*8;
+      ctx.beginPath();
+      ctx.arc(px, py, rad, 0, Math.PI*2);
+      ctx.fill();
+      // small dribbles
+      if (i % 3 === 0) {
+        ctx.fillRect(px - 2, py + rad, 3, 10 + splatterRand(i+300)*8);
+      }
+    }
+
+    // Helper: outlined shape
+    function inkOutline(thick) {
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = thick || 5;
+    }
+
+    // Bortre ben (sträckt)
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.moveTo(40, 50);
+    ctx.bezierCurveTo(90, 30, 140, 50, 180, 60);
+    ctx.lineTo(180, 80);
+    ctx.bezierCurveTo(140, 75, 90, 75, 40, 75);
+    ctx.closePath();
+    ctx.fill();
+    inkOutline(6); ctx.stroke();
+
+    // Närmare ben (uppvikt)
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.moveTo(40, 60);
+    ctx.lineTo(95, 130);
+    ctx.lineTo(115, 130);
+    ctx.lineTo(55, 60);
+    ctx.closePath();
+    ctx.fill();
+    inkOutline(6); ctx.stroke();
+    // tå/fot
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.ellipse(105, 128, 16, 7, 0, 0, Math.PI*2);
+    ctx.fill();
+    inkOutline(5); ctx.stroke();
+
+    // Torso (liggande, lite vriden)
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.ellipse(-20, 35, 90, 38, 0.1, 0, Math.PI*2);
+    ctx.fill();
+    // skuggning under
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.ellipse(-20, 55, 88, 22, 0.1, 0, Math.PI*2);
+    ctx.fill();
+    inkOutline(6);
+    ctx.beginPath();
+    ctx.ellipse(-20, 35, 90, 38, 0.1, 0, Math.PI*2);
+    ctx.stroke();
+
+    // Kjol/dräkt
+    ctx.fillStyle = kilt;
+    ctx.beginPath();
+    ctx.moveTo(-15, 25);
+    ctx.lineTo(55, 30);
+    ctx.lineTo(60, 75);
+    ctx.lineTo(-10, 70);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = kiltShade;
+    ctx.fillRect(-15, 60, 75, 12);
+    inkOutline(5);
+    ctx.beginPath();
+    ctx.moveTo(-15, 25);
+    ctx.lineTo(55, 30);
+    ctx.lineTo(60, 75);
+    ctx.lineTo(-10, 70);
+    ctx.closePath();
+    ctx.stroke();
+
+    // Welt-mark från piskan (röd stripa över bringan)
+    ctx.strokeStyle = blood;
+    ctx.lineWidth = 8;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(-80, 15);
+    ctx.quadraticCurveTo(-20, -8, 50, 28);
+    ctx.stroke();
+    ctx.strokeStyle = '#ff4040';
+    ctx.lineWidth = 3;
+    ctx.stroke();
+
+    // Vänster arm uppslängd
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.moveTo(-50, 5);
+    ctx.bezierCurveTo(-90, -50, -110, -90, -80, -130);
+    ctx.lineTo(-65, -130);
+    ctx.bezierCurveTo(-90, -85, -75, -50, -30, 10);
+    ctx.closePath();
+    ctx.fill();
+    inkOutline(6); ctx.stroke();
+    // näve
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.arc(-72, -130, 14, 0, Math.PI*2);
+    ctx.fill();
+    inkOutline(5); ctx.stroke();
+
+    // Höger arm utsträckt
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.moveTo(0, 25);
+    ctx.bezierCurveTo(-40, 30, -100, 50, -160, 80);
+    ctx.lineTo(-155, 95);
+    ctx.bezierCurveTo(-90, 70, -30, 50, 10, 45);
+    ctx.closePath();
+    ctx.fill();
+    inkOutline(6); ctx.stroke();
+
+    // Huvud — vridet åt sidan, skrikande
+    const hx = -100, hy = -15;
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.ellipse(hx, hy, 42, 36, -0.15, 0, Math.PI*2);
+    ctx.fill();
+    // skuggning på kindarna
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.ellipse(hx + 4, hy + 12, 32, 14, -0.15, 0, Math.PI*2);
+    ctx.fill();
+    inkOutline(6);
+    ctx.beginPath();
+    ctx.ellipse(hx, hy, 42, 36, -0.15, 0, Math.PI*2);
+    ctx.stroke();
+
+    // Hår om woman
+    if (comicPanel.type === 'woman' && comicPanel.hair) {
+      ctx.fillStyle = comicPanel.hair;
+      ctx.beginPath();
+      ctx.ellipse(hx - 6, hy - 24, 38, 18, 0.1, 0, Math.PI*2);
+      ctx.fill();
+      // strands utdragna
+      ctx.fillRect(hx - 38, hy - 18, 8, 30);
+      ctx.fillRect(hx - 30, hy - 22, 6, 26);
+      inkOutline(4);
+      ctx.beginPath();
+      ctx.ellipse(hx - 6, hy - 24, 38, 18, 0.1, 0, Math.PI*2);
+      ctx.stroke();
+    } else if (comicPanel.type === 'child') {
+      ctx.fillStyle = '#1a0e08';
+      ctx.fillRect(hx - 18, hy - 38, 36, 10);
+    }
+
+    // X-ögon
+    inkOutline(5);
+    ctx.beginPath();
+    ctx.moveTo(hx - 18, hy - 8); ctx.lineTo(hx - 4, hy + 6);
+    ctx.moveTo(hx - 18, hy + 6); ctx.lineTo(hx - 4, hy - 8);
+    ctx.moveTo(hx + 8, hy - 8); ctx.lineTo(hx + 22, hy + 6);
+    ctx.moveTo(hx + 8, hy + 6); ctx.lineTo(hx + 22, hy - 8);
+    ctx.stroke();
+
+    // Skrikande mun
+    ctx.fillStyle = ink;
+    ctx.beginPath();
+    ctx.ellipse(hx + 3, hy + 22, 18, 13, -0.1, 0, Math.PI*2);
+    ctx.fill();
+    // tänder
+    ctx.fillStyle = '#f4e8c8';
+    ctx.fillRect(hx - 10, hy + 18, 26, 3);
+    ctx.fillRect(hx - 10, hy + 25, 26, 3);
+    // tunga
+    ctx.fillStyle = '#a02828';
+    ctx.beginPath();
+    ctx.ellipse(hx + 3, hy + 27, 6, 4, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Blod från munnen och pannan
+    ctx.fillStyle = blood;
+    ctx.beginPath();
+    ctx.moveTo(hx + 12, hy + 30);
+    ctx.lineTo(hx + 16, hy + 60);
+    ctx.lineTo(hx + 10, hy + 60);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(hx - 8, hy - 32);
+    ctx.lineTo(hx - 4, hy - 12);
+    ctx.lineTo(hx - 12, hy - 12);
+    ctx.closePath();
+    ctx.fill();
+
+    // Hatchning-skuggning på torson (Spawn-stil)
+    ctx.strokeStyle = 'rgba(0,0,0,0.45)';
+    ctx.lineWidth = 1.5;
+    for (let i = 0; i < 14; i++) {
+      const px = -80 + i * 12;
+      ctx.beginPath();
+      ctx.moveTo(px, 55);
+      ctx.lineTo(px + 18, 75);
+      ctx.stroke();
+    }
+
+    ctx.restore();
+  }
+
+  function drawComicWhip(startX, startY, endX, endY) {
+    ctx.save();
+    ctx.lineCap = 'round';
+    ctx.lineJoin = 'round';
+    const dx = endX - startX, dy = endY - startY;
+    // kontrollpunkt — kurvar lite ovanför/sidan om midten
+    const cpX = (startX + endX) / 2 - dy * 0.35;
+    const cpY = (startY + endY) / 2 + dx * 0.25;
+
+    // tjock svart kontur
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 14;
+    ctx.beginPath();
+    ctx.moveTo(startX, startY);
+    ctx.quadraticCurveTo(cpX, cpY, endX, endY);
+    ctx.stroke();
+    // mörkbrunt läder
+    ctx.strokeStyle = '#3a1a08';
+    ctx.lineWidth = 8;
+    ctx.stroke();
+    // highlight
+    ctx.strokeStyle = '#7a4218';
+    ctx.lineWidth = 2;
+    ctx.stroke();
+
+    // Action-streck vid spetsen
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 5;
+    for (let i = 0; i < 10; i++) {
+      const a = (i/10)*Math.PI*2;
+      ctx.beginPath();
+      ctx.moveTo(endX + Math.cos(a)*38, endY + Math.sin(a)*38);
+      ctx.lineTo(endX + Math.cos(a)*78, endY + Math.sin(a)*78);
+      ctx.stroke();
+    }
+
+    // Star-burst på spetsen
+    ctx.beginPath();
+    for (let i = 0; i < 16; i++) {
+      const a = (i / 16) * Math.PI * 2;
+      const r = i % 2 === 0 ? 52 : 24;
+      const px = endX + Math.cos(a) * r;
+      const py = endY + Math.sin(a) * r;
+      if (i === 0) ctx.moveTo(px, py);
+      else ctx.lineTo(px, py);
+    }
+    ctx.closePath();
+    ctx.fillStyle = '#ffffa0';
+    ctx.fill();
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 5;
+    ctx.stroke();
+
+    // CRACK-text inuti
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 26px "Impact", "Arial Black", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('CRACK!', endX, endY + 2);
+
+    ctx.restore();
+  }
+
+  // ---------- Comic Pharaoh (Spawn-stil, dominant, hotfull) ----------
+  function drawComicPharaoh(cx, cy) {
+    // cx, cy = position vid hans fötter
+    ctx.save();
+    ctx.translate(cx, cy);
+
+    const ink = '#0a0408';
+    const skin = '#c89060';
+    const skinShade = '#7a4818';
+    const skinDark = '#3a2410';
+    const gold = '#f4d050';
+    const goldDark = '#8a6818';
+    const nemesBlue = '#3868c0';
+    const nemesDark = '#1a3070';
+    const blood = '#a00808';
+
+    function pseudoRand(n) {
+      const s = Math.sin((comicPanel.splatterSeed + n*7.3) * 12.9898) * 43758.5453;
+      return s - Math.floor(s);
+    }
+    function inkStroke(thick) {
+      ctx.lineJoin = 'round';
+      ctx.lineCap = 'round';
+      ctx.strokeStyle = ink;
+      ctx.lineWidth = thick || 5;
+    }
+
+    // ---- Ben i steg-pose (bakre + främre) ----
+    // bakre ben (stadigt rakt)
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.moveTo(-22, -110);
+    ctx.lineTo(-32, -10);
+    ctx.lineTo(-12, -10);
+    ctx.lineTo(-2, -110);
+    ctx.closePath();
+    ctx.fill();
+    inkStroke(6); ctx.stroke();
+    // fot
+    ctx.fillStyle = skinDark;
+    ctx.fillRect(-36, -14, 28, 8);
+    inkStroke(5); ctx.strokeRect(-36, -14, 28, 8);
+
+    // främre ben (steg framåt, framskjuten)
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.moveTo(0, -110);
+    ctx.lineTo(40, -20);
+    ctx.lineTo(72, -20);
+    ctx.lineTo(28, -110);
+    ctx.closePath();
+    ctx.fill();
+    inkStroke(6); ctx.stroke();
+    // knä-skuggning
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.arc(20, -70, 12, 0, Math.PI*2);
+    ctx.fill();
+    // fot
+    ctx.fillStyle = skinDark;
+    ctx.fillRect(40, -22, 38, 8);
+    inkStroke(5); ctx.strokeRect(40, -22, 38, 8);
+
+    // ---- Shendyt (kjol) — vit/guld ----
+    ctx.fillStyle = '#fff4d0';
+    ctx.beginPath();
+    ctx.moveTo(-40, -160);
+    ctx.lineTo(40, -160);
+    ctx.lineTo(55, -100);
+    ctx.lineTo(-30, -100);
+    ctx.closePath();
+    ctx.fill();
+    // guldsöm
+    ctx.fillStyle = gold;
+    ctx.fillRect(-32, -106, 87, 8);
+    // mittflik
+    ctx.fillStyle = gold;
+    ctx.beginPath();
+    ctx.moveTo(-5, -160);
+    ctx.lineTo(15, -160);
+    ctx.lineTo(20, -90);
+    ctx.lineTo(-10, -90);
+    ctx.closePath();
+    ctx.fill();
+    inkStroke(5);
+    ctx.beginPath();
+    ctx.moveTo(-40, -160);
+    ctx.lineTo(40, -160);
+    ctx.lineTo(55, -100);
+    ctx.lineTo(-30, -100);
+    ctx.closePath();
+    ctx.stroke();
+
+    // ---- Bar muskulös överkropp ----
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.moveTo(-55, -255);     // axel vänster
+    ctx.lineTo(60, -255);      // axel höger
+    ctx.lineTo(50, -160);      // höft höger
+    ctx.lineTo(-40, -160);     // höft vänster
+    ctx.closePath();
+    ctx.fill();
+    inkStroke(6); ctx.stroke();
+
+    // Bröstmuskler (definition)
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.ellipse(-15, -230, 22, 14, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.beginPath();
+    ctx.ellipse(25, -230, 22, 14, 0, 0, Math.PI*2);
+    ctx.fill();
+    // bröst-skiljelinjer
+    ctx.strokeStyle = skinDark;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(5, -250);
+    ctx.lineTo(5, -210);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.moveTo(-35, -222);
+    ctx.bezierCurveTo(-20, -244, 0, -244, 5, -228);
+    ctx.moveTo(5, -228);
+    ctx.bezierCurveTo(10, -244, 30, -244, 45, -222);
+    ctx.stroke();
+
+    // Magmuskler
+    ctx.strokeStyle = skinDark;
+    ctx.lineWidth = 2.5;
+    for (let i = 0; i < 3; i++) {
+      const my = -200 + i * 12;
+      ctx.beginPath();
+      ctx.moveTo(-20, my);
+      ctx.lineTo(30, my);
+      ctx.stroke();
+    }
+    ctx.beginPath();
+    ctx.moveTo(5, -210);
+    ctx.lineTo(5, -170);
+    ctx.stroke();
+
+    // ---- Guldkrage (usekh) runt halsen ----
+    ctx.fillStyle = gold;
+    ctx.beginPath();
+    ctx.ellipse(3, -255, 58, 22, 0, 0, Math.PI*2);
+    ctx.fill();
+    inkStroke(5);
+    ctx.beginPath();
+    ctx.ellipse(3, -255, 58, 22, 0, 0, Math.PI*2);
+    ctx.stroke();
+    // guld-pärlor på kragen
+    ctx.fillStyle = goldDark;
+    for (let i = 0; i < 9; i++) {
+      ctx.beginPath();
+      ctx.arc(-44 + i*12, -250, 2.5, 0, Math.PI*2);
+      ctx.fill();
+    }
+    // mitten-juvel (röd)
+    ctx.fillStyle = '#c01818';
+    ctx.beginPath();
+    ctx.arc(3, -245, 6, 0, Math.PI*2);
+    ctx.fill();
+    inkStroke(3); ctx.stroke();
+
+    // ---- Höger arm (utsträckt UPP-höger med piskan) ----
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.moveTo(48, -255);  // axel
+    ctx.lineTo(90, -210);  // armbåge
+    ctx.lineTo(140, -180); // näve
+    ctx.lineTo(150, -165);
+    ctx.lineTo(100, -195);
+    ctx.lineTo(60, -240);
+    ctx.closePath();
+    ctx.fill();
+    inkStroke(6); ctx.stroke();
+    // bizeps-definition
+    ctx.strokeStyle = skinDark;
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(58, -240);
+    ctx.bezierCurveTo(78, -230, 82, -225, 88, -213);
+    ctx.stroke();
+    // armmuskel-skuggning
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.ellipse(74, -222, 12, 6, 0.4, 0, Math.PI*2);
+    ctx.fill();
+
+    // Näve som griper handtaget
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.arc(140, -175, 14, 0, Math.PI*2);
+    ctx.fill();
+    inkStroke(5); ctx.stroke();
+
+    // Piskhandtag i hans hand (guld, glänsande)
+    ctx.fillStyle = gold;
+    ctx.fillRect(132, -195, 16, 22);
+    ctx.fillStyle = goldDark;
+    ctx.fillRect(132, -195, 16, 5);
+    ctx.fillRect(132, -176, 16, 4);
+    inkStroke(4);
+    ctx.strokeRect(132, -195, 16, 22);
+    // band runt handtaget
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(132, -185); ctx.lineTo(148, -185);
+    ctx.moveTo(132, -181); ctx.lineTo(148, -181);
+    ctx.stroke();
+
+    // ---- Vänster arm (pekande utåt, hotfull gest) ----
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.moveTo(-50, -255);   // axel
+    ctx.lineTo(-115, -230);  // armbåge
+    ctx.lineTo(-150, -200);  // hand
+    ctx.lineTo(-140, -190);
+    ctx.lineTo(-110, -220);
+    ctx.lineTo(-40, -240);
+    ctx.closePath();
+    ctx.fill();
+    inkStroke(6); ctx.stroke();
+    // pekande finger
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.moveTo(-150, -200);
+    ctx.lineTo(-172, -202);
+    ctx.lineTo(-170, -196);
+    ctx.lineTo(-148, -194);
+    ctx.closePath();
+    ctx.fill();
+    inkStroke(4); ctx.stroke();
+
+    // ---- Huvud (profil, åt höger mot offret) ----
+    const hx = 8, hy = -302;
+    // Bakre nemes-flap (häng)
+    ctx.fillStyle = nemesBlue;
+    ctx.beginPath();
+    ctx.moveTo(hx - 28, hy - 5);
+    ctx.lineTo(hx - 38, hy + 35);
+    ctx.lineTo(hx - 12, hy + 50);
+    ctx.lineTo(hx + 12, hy + 32);
+    ctx.lineTo(hx + 12, hy);
+    ctx.closePath();
+    ctx.fill();
+    inkStroke(5); ctx.stroke();
+    // guldränder på flap
+    ctx.fillStyle = gold;
+    ctx.fillRect(hx - 34, hy + 4, 44, 4);
+    ctx.fillRect(hx - 36, hy + 15, 46, 4);
+    ctx.fillRect(hx - 36, hy + 26, 46, 4);
+
+    // Huvud (skallens silhuett)
+    ctx.fillStyle = skin;
+    ctx.beginPath();
+    ctx.ellipse(hx, hy, 34, 38, 0, 0, Math.PI*2);
+    ctx.fill();
+    // skuggig kindlinje
+    ctx.fillStyle = skinShade;
+    ctx.beginPath();
+    ctx.ellipse(hx + 6, hy + 12, 26, 14, 0, 0, Math.PI*2);
+    ctx.fill();
+    inkStroke(6);
+    ctx.beginPath();
+    ctx.ellipse(hx, hy, 34, 38, 0, 0, Math.PI*2);
+    ctx.stroke();
+
+    // Nemes topp/panndelen
+    ctx.fillStyle = nemesBlue;
+    ctx.beginPath();
+    ctx.moveTo(hx - 32, hy - 8);
+    ctx.quadraticCurveTo(hx + 2, hy - 50, hx + 32, hy - 16);
+    ctx.lineTo(hx + 26, hy - 12);
+    ctx.lineTo(hx + 16, hy - 18);
+    ctx.lineTo(hx + 4, hy - 22);
+    ctx.lineTo(hx - 14, hy - 18);
+    ctx.lineTo(hx - 28, hy - 10);
+    ctx.closePath();
+    ctx.fill();
+    inkStroke(5); ctx.stroke();
+    // guldränder
+    ctx.fillStyle = gold;
+    ctx.fillRect(hx - 32, hy - 16, 64, 4);
+    ctx.fillRect(hx - 30, hy - 6, 62, 3);
+
+    // Uraeus (kobra på pannan, hotfull)
+    ctx.fillStyle = gold;
+    ctx.beginPath();
+    ctx.moveTo(hx + 6, hy - 18);
+    ctx.lineTo(hx + 20, hy - 18);
+    ctx.lineTo(hx + 16, hy - 42);
+    ctx.lineTo(hx + 12, hy - 42);
+    ctx.closePath();
+    ctx.fill();
+    inkStroke(3); ctx.stroke();
+    // kobras huvud
+    ctx.fillStyle = goldDark;
+    ctx.beginPath();
+    ctx.ellipse(hx + 14, hy - 44, 5, 4, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#c01818';
+    ctx.beginPath();
+    ctx.arc(hx + 15, hy - 44, 1.5, 0, Math.PI*2);
+    ctx.fill();
+
+    // Ögonbryn — sänkt, argt
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 5;
+    ctx.beginPath();
+    ctx.moveTo(hx - 4, hy - 5);
+    ctx.lineTo(hx + 24, hy + 4);
+    ctx.stroke();
+
+    // Öga — glödande röd-lila, intensivt
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    ctx.ellipse(hx + 10, hy + 6, 9, 5, -0.1, 0, Math.PI*2);
+    ctx.fill();
+    // irisen
+    ctx.fillStyle = '#ff2020';
+    ctx.beginPath();
+    ctx.arc(hx + 14, hy + 6, 4, 0, Math.PI*2);
+    ctx.fill();
+    // pupill
+    ctx.fillStyle = ink;
+    ctx.beginPath();
+    ctx.arc(hx + 15, hy + 6, 1.8, 0, Math.PI*2);
+    ctx.fill();
+    // glöd-skuggning ovanför ögat
+    ctx.strokeStyle = 'rgba(255,40,40,0.6)';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    ctx.moveTo(hx + 4, hy + 12); ctx.lineTo(hx + 6, hy + 18);
+    ctx.moveTo(hx + 12, hy + 14); ctx.lineTo(hx + 14, hy + 20);
+    ctx.moveTo(hx + 18, hy + 12); ctx.lineTo(hx + 20, hy + 18);
+    ctx.stroke();
+
+    // Näsa
+    ctx.strokeStyle = ink;
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(hx + 18, hy - 6);
+    ctx.lineTo(hx + 24, hy + 14);
+    ctx.lineTo(hx + 18, hy + 18);
+    ctx.stroke();
+
+    // Argt grin med tänder
+    ctx.fillStyle = ink;
+    ctx.beginPath();
+    ctx.moveTo(hx + 2, hy + 22);
+    ctx.lineTo(hx + 28, hy + 24);
+    ctx.lineTo(hx + 26, hy + 30);
+    ctx.lineTo(hx + 4, hy + 28);
+    ctx.closePath();
+    ctx.fill();
+    // tänder
+    ctx.fillStyle = '#f4e8c8';
+    ctx.fillRect(hx + 5, hy + 24, 22, 3);
+    // hörntänder
+    ctx.beginPath();
+    ctx.moveTo(hx + 8, hy + 27);
+    ctx.lineTo(hx + 10, hy + 30);
+    ctx.lineTo(hx + 12, hy + 27);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(hx + 22, hy + 27);
+    ctx.lineTo(hx + 24, hy + 30);
+    ctx.lineTo(hx + 26, hy + 27);
+    ctx.closePath();
+    ctx.fill();
+
+    // Skägg (faraos ceremoniella)
+    ctx.fillStyle = ink;
+    ctx.beginPath();
+    ctx.moveTo(hx + 14, hy + 34);
+    ctx.lineTo(hx + 24, hy + 34);
+    ctx.lineTo(hx + 22, hy + 58);
+    ctx.lineTo(hx + 16, hy + 58);
+    ctx.closePath();
+    ctx.fill();
+    // skägg-textur
+    ctx.strokeStyle = '#3a2010';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(hx + 15, hy + 40); ctx.lineTo(hx + 23, hy + 40);
+    ctx.moveTo(hx + 15, hy + 46); ctx.lineTo(hx + 23, hy + 46);
+    ctx.moveTo(hx + 15, hy + 52); ctx.lineTo(hx + 23, hy + 52);
+    ctx.stroke();
+
+    // ---- Hatchning (Spawn-typisk crosshatch på muskler) ----
+    ctx.strokeStyle = 'rgba(0,0,0,0.40)';
+    ctx.lineWidth = 1.3;
+    // bröstkorg
+    for (let i = 0; i < 10; i++) {
+      ctx.beginPath();
+      ctx.moveTo(-50 + i*3, -210);
+      ctx.lineTo(-44 + i*3, -195);
+      ctx.stroke();
+    }
+    // mag-hatch
+    for (let i = 0; i < 8; i++) {
+      ctx.beginPath();
+      ctx.moveTo(20 + i*3, -195);
+      ctx.lineTo(26 + i*3, -180);
+      ctx.stroke();
+    }
+    // bicep-hatch
+    for (let i = 0; i < 6; i++) {
+      ctx.beginPath();
+      ctx.moveTo(64 + i*3, -232 + i*2);
+      ctx.lineTo(70 + i*3, -222 + i*2);
+      ctx.stroke();
+    }
+
+    // ---- Blod-stänk på Faraon (gore — han har just slagit) ----
+    ctx.fillStyle = blood;
+    for (let i = 0; i < 12; i++) {
+      const px = -40 + pseudoRand(i) * 100;
+      const py = -240 + pseudoRand(i + 50) * 90;
+      const r = 1.5 + pseudoRand(i + 100) * 3;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI*2);
+      ctx.fill();
+    }
+    // blod på höger arm (närmast piskan)
+    for (let i = 0; i < 7; i++) {
+      const px = 60 + pseudoRand(i + 200) * 70;
+      const py = -240 + pseudoRand(i + 250) * 60;
+      const r = 1.5 + pseudoRand(i + 300) * 2.5;
+      ctx.beginPath();
+      ctx.arc(px, py, r, 0, Math.PI*2);
+      ctx.fill();
+    }
+    // dribbel på bröstet
+    for (let i = 0; i < 4; i++) {
+      const px = -20 + pseudoRand(i + 400) * 70;
+      const py = -225 + pseudoRand(i + 450) * 40;
+      ctx.fillRect(px, py, 2, 6 + pseudoRand(i + 500)*5);
+    }
+
+    // ---- Skuggning under Faraon ----
+    ctx.fillStyle = 'rgba(0,0,0,0.45)';
+    ctx.beginPath();
+    ctx.ellipse(10, -4, 80, 8, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.restore();
+  }
+
+  function drawComicSpeech(cx, cy, text) {
+    ctx.save();
+    ctx.translate(cx, cy);
+    // skugga
+    ctx.fillStyle = 'rgba(0,0,0,0.5)';
+    ctx.beginPath();
+    ctx.ellipse(6, 6, 130, 60, 0, 0, Math.PI*2);
+    ctx.fill();
+    // bubbla
+    ctx.fillStyle = '#fff8e0';
+    ctx.strokeStyle = '#000';
+    ctx.lineWidth = 6;
+    ctx.beginPath();
+    ctx.ellipse(0, 0, 130, 60, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+    // svans pekande nedåt-vänster mot offret
+    ctx.beginPath();
+    ctx.moveTo(-70, 30);
+    ctx.lineTo(-130, 110);
+    ctx.lineTo(-30, 45);
+    ctx.closePath();
+    ctx.fillStyle = '#fff8e0';
+    ctx.fill();
+    ctx.stroke();
+    // dölj svans-anslutning till bubblan
+    ctx.fillStyle = '#fff8e0';
+    ctx.beginPath();
+    ctx.ellipse(-50, 30, 40, 12, -0.4, 0, Math.PI*2);
+    ctx.fill();
+    // text
+    ctx.fillStyle = '#000';
+    ctx.font = 'bold 36px "Impact", "Arial Black", sans-serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, 0, 0);
+    ctx.restore();
+  }
+
+  function drawCelestials(dayPhase) {
+    // Sol: synlig dagtid. Båge från vänster (0.0 dayTime=midnatt under horisonten)
+    const t = state.dayTime;
+    // sol-vinkel: 0 = horisont öst, π = horisont väst, går t från 0.25 till 0.75
+    const sunT = (t - 0.25) * 2; // 0 → 1 över dagen (0.25..0.75)
+    if (sunT >= 0 && sunT <= 1) {
+      const angle = sunT * Math.PI;
+      const sx = W * (1 - sunT);
+      const sy = H*0.55 - Math.sin(angle) * H*0.45;
+      ctx.fillStyle = 'rgba(255,244,184,0.3)';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 70, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = '#fff4b8';
+      ctx.beginPath();
+      ctx.arc(sx, sy, 42, 0, Math.PI*2);
+      ctx.fill();
+    }
+    // Måne: synlig nattetid (t 0.75 → 1.25 / 0.25)
+    let moonT = -1;
+    if (t > 0.75) moonT = (t - 0.75) * 2;
+    else if (t < 0.25) moonT = (t + 0.25) * 2;
+    if (moonT >= 0 && moonT <= 1) {
+      const angle = moonT * Math.PI;
+      const mx = W * (1 - moonT);
+      const my = H*0.55 - Math.sin(angle) * H*0.45;
+      // glödaur
+      ctx.fillStyle = 'rgba(220,230,255,0.2)';
+      ctx.beginPath();
+      ctx.arc(mx, my, 50, 0, Math.PI*2);
+      ctx.fill();
+      // måne
+      ctx.fillStyle = '#f0f0e8';
+      ctx.beginPath();
+      ctx.arc(mx, my, 28, 0, Math.PI*2);
+      ctx.fill();
+      // kratrar
+      ctx.fillStyle = 'rgba(160,160,170,0.5)';
+      ctx.beginPath(); ctx.arc(mx-8, my-4, 5, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(mx+6, my+7, 4, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(mx+10, my-9, 3, 0, Math.PI*2); ctx.fill();
+    }
+  }
+
+  function drawDunes(dayPhase) {
+    const c = mixHex('#d8a868', '#2a2050', 1 - dayPhase);
+    ctx.fillStyle = c;
+    ctx.beginPath();
+    ctx.moveTo(0, 380);
+    ctx.bezierCurveTo(150, 340, 350, 400, 500, 360);
+    ctx.bezierCurveTo(680, 320, 820, 390, W, 360);
+    ctx.lineTo(W, H); ctx.lineTo(0, H); ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawSmallPyramid(x, y, size, color, dayPhase) {
+    const lit = mixHex(color, '#1a1430', 1 - dayPhase);
+    ctx.fillStyle = lit;
+    ctx.beginPath();
+    ctx.moveTo(x, y - size);
+    ctx.lineTo(x + size*0.9, y);
+    ctx.lineTo(x - size*0.9, y);
+    ctx.closePath();
+    ctx.fill();
+    ctx.fillStyle = 'rgba(40,20,10,0.4)';
+    ctx.beginPath();
+    ctx.moveTo(x, y - size);
+    ctx.lineTo(x + size*0.9, y);
+    ctx.lineTo(x, y);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // ---------- Sphinx (profile, eroded sandstone) ----------
+  function drawSphinx(cx, cy, dayPhase) {
+    // If a sprite exists at images/sphinx.png, use it
+    if (sphinxImgLoaded) {
+      const targetW = 460;
+      const ratio = sphinxImg.naturalHeight / sphinxImg.naturalWidth;
+      const h = targetW * ratio;
+      ctx.save();
+      // sand-täckning: rita lite ovanför sand-linjen så fötterna döljs av sanden
+      ctx.drawImage(sphinxImg, cx - targetW/2 + 20, cy - h + 22, targetW, h);
+      // natt-tint på spriten (mörkare på natten)
+      if (dayPhase < 1) {
+        ctx.globalCompositeOperation = 'source-atop';
+        ctx.fillStyle = `rgba(20,15,50,${(1-dayPhase)*0.45})`;
+        ctx.fillRect(cx - targetW/2 + 20, cy - h + 22, targetW, h);
+      }
+      ctx.restore();
+      return;
+    }
+    // cx = approx center; cy = ground level of the base
+    const stone     = mixHex('#d6a868', '#1a1238', 1 - dayPhase);
+    const stoneLit  = mixHex('#e8c08c', '#2a1f50', 1 - dayPhase);
+    const stoneMid  = mixHex('#c89058', '#1a1240', 1 - dayPhase);
+    const stoneDark = mixHex('#8a5828', '#0a0820', 1 - dayPhase);
+    const stoneShadow = mixHex('#5a3818', '#050310', 1 - dayPhase);
+
+    // ---------- Restaurerad block-sockel längst ner ----------
+    ctx.fillStyle = stoneDark;
+    ctx.fillRect(cx - 140, cy, 280, 16);
+    ctx.fillStyle = stoneMid;
+    for (let bx = -138; bx < 140; bx += 14) {
+      ctx.fillRect(cx + bx, cy + 2, 13, 5);
+    }
+    for (let bx = -131; bx < 140; bx += 14) {
+      ctx.fillRect(cx + bx, cy + 9, 13, 5);
+    }
+    // skuggad fog
+    ctx.fillStyle = stoneShadow;
+    for (let bx = -138; bx < 140; bx += 14) {
+      ctx.fillRect(cx + bx + 12, cy + 2, 1, 12);
+    }
+
+    // ---------- Kropp: horisontella stratum (eroderade lager) ----------
+    // Kroppen är längre än hög, sluttar uppåt mot bringan på höger sida
+    // Lager är progressivt smalare uppåt, med oregelbundna kanter
+    const bands = [
+      { y: -6,  xl: -135, xr: 110, top: stoneMid,  bot: stoneShadow },
+      { y: -16, xl: -132, xr: 112, top: stone,     bot: stoneDark   },
+      { y: -26, xl: -128, xr: 113, top: stoneLit,  bot: stoneMid    },
+      { y: -36, xl: -125, xr: 112, top: stoneMid,  bot: stoneDark   },
+      { y: -46, xl: -120, xr: 110, top: stone,     bot: stoneShadow },
+      { y: -56, xl: -110, xr: 108, top: stoneLit,  bot: stoneMid    },
+      { y: -66, xl:  -95, xr: 105, top: stoneMid,  bot: stoneDark   },
+      { y: -76, xl:  -75, xr: 100, top: stone,     bot: stoneShadow },
+      { y: -86, xl:  -50, xr:  92, top: stoneLit,  bot: stoneMid    },
+    ];
+    for (const b of bands) {
+      const w = b.xr - b.xl;
+      ctx.fillStyle = b.top;
+      ctx.fillRect(cx + b.xl, cy + b.y,     w, 6);
+      ctx.fillStyle = b.bot;
+      ctx.fillRect(cx + b.xl, cy + b.y + 6, w, 4);
+      // hack vid kanten (eroderad)
+      ctx.fillStyle = b.bot;
+      ctx.fillRect(cx + b.xl - 2, cy + b.y + 3, 2, 4);
+      ctx.fillRect(cx + b.xr - 1, cy + b.y + 2, 3, 5);
+    }
+
+    // skuggning under varje band (extra erosionstreck)
+    ctx.strokeStyle = 'rgba(50,25,10,0.45)';
+    ctx.lineWidth = 1;
+    for (const b of bands) {
+      ctx.beginPath();
+      ctx.moveTo(cx + b.xl, cy + b.y + 10);
+      ctx.lineTo(cx + b.xr, cy + b.y + 10);
+      ctx.stroke();
+    }
+
+    // ---------- Bröstkorg / framhals — utskjuter åt höger uppåt ----------
+    // ett extra strata-block för bringan
+    ctx.fillStyle = stoneMid;
+    ctx.fillRect(cx + 35, cy - 100, 70, 14);
+    ctx.fillStyle = stoneLit;
+    ctx.fillRect(cx + 35, cy - 100, 70, 4);
+    ctx.fillStyle = stoneDark;
+    ctx.fillRect(cx + 35, cy - 90, 70, 4);
+
+    // ---------- Främre tassar (utsträckta åt höger) ----------
+    // Sfinxen har långa tassar — vi gör en utskjutning av sockeln
+    ctx.fillStyle = stoneDark;
+    ctx.fillRect(cx + 110, cy - 12, 90, 16);
+    ctx.fillStyle = stoneMid;
+    ctx.fillRect(cx + 110, cy - 12, 90, 5);
+    ctx.fillStyle = stone;
+    ctx.fillRect(cx + 110, cy - 9, 90, 2);
+    // klor / tå-skåror
+    ctx.fillStyle = stoneShadow;
+    ctx.fillRect(cx + 135, cy - 8, 1, 12);
+    ctx.fillRect(cx + 155, cy - 8, 1, 12);
+    ctx.fillRect(cx + 178, cy - 8, 1, 12);
+    // klospetsar (ljusare)
+    ctx.fillStyle = stoneLit;
+    ctx.fillRect(cx + 196, cy - 3, 4, 3);
+    ctx.fillRect(cx + 176, cy - 3, 3, 3);
+    ctx.fillRect(cx + 154, cy - 3, 3, 3);
+
+    // ---------- Huvud (profil, ansiktet vänt åt höger) ----------
+    const hx = cx + 80;   // huvudets centrum-x
+    const hy = cy - 145;  // huvudets centrum-y
+
+    // Nemes — bakre flap (häng-fliken som faller ner mot axeln)
+    ctx.fillStyle = stoneMid;
+    ctx.beginPath();
+    ctx.moveTo(hx - 18, hy - 18);
+    ctx.quadraticCurveTo(hx - 32, hy - 5, hx - 28, hy + 18);
+    ctx.lineTo(hx - 18, hy + 38);
+    ctx.lineTo(hx + 4, hy + 35);
+    ctx.lineTo(hx + 6, hy + 8);
+    ctx.lineTo(hx - 8, hy - 8);
+    ctx.closePath();
+    ctx.fill();
+    // skuggning av flapen
+    ctx.fillStyle = stoneShadow;
+    ctx.beginPath();
+    ctx.moveTo(hx - 28, hy + 18);
+    ctx.lineTo(hx - 18, hy + 38);
+    ctx.lineTo(hx + 4, hy + 35);
+    ctx.lineTo(hx - 4, hy + 22);
+    ctx.closePath();
+    ctx.fill();
+    // nemes-veck (vertikala ränder på flapen)
+    ctx.strokeStyle = stoneShadow;
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    for (let i = -24; i <= -6; i += 4) {
+      ctx.moveTo(hx + i, hy - 5);
+      ctx.lineTo(hx + i + 5, hy + 32);
+    }
+    ctx.stroke();
+
+    // Huvud-volym (skallens silhuett i profil)
+    ctx.fillStyle = stone;
+    ctx.beginPath();
+    ctx.moveTo(hx - 8,  hy - 22);      // bak topp av pannan
+    ctx.quadraticCurveTo(hx + 18, hy - 30, hx + 32, hy - 18); // hjässans båge under nemes
+    ctx.lineTo(hx + 36, hy - 6);                                // panna ner
+    ctx.lineTo(hx + 34, hy + 2);                                // ögonhåla
+    ctx.lineTo(hx + 40, hy + 4);                                // näsroten
+    ctx.lineTo(hx + 38, hy + 14);                               // näsa
+    ctx.lineTo(hx + 32, hy + 18);                               // näsa avbruten/skadad
+    ctx.lineTo(hx + 34, hy + 22);                               // överläpp
+    ctx.lineTo(hx + 30, hy + 26);                               // mun ut
+    ctx.lineTo(hx + 30, hy + 30);                               // underläpp
+    ctx.lineTo(hx + 26, hy + 34);                               // haka
+    ctx.lineTo(hx + 18, hy + 38);                               // halsens framsida
+    ctx.lineTo(hx - 2,  hy + 36);                               // strupe
+    ctx.lineTo(hx - 8,  hy + 20);                               // hals bak
+    ctx.lineTo(hx - 10, hy + 0);
+    ctx.lineTo(hx - 8,  hy - 22);
+    ctx.closePath();
+    ctx.fill();
+
+    // Nemes toppfront (panndelen av huvudbonaden)
+    ctx.fillStyle = stoneMid;
+    ctx.beginPath();
+    ctx.moveTo(hx - 10, hy - 22);
+    ctx.quadraticCurveTo(hx + 12, hy - 36, hx + 32, hy - 18);
+    ctx.lineTo(hx + 28, hy - 12);
+    ctx.lineTo(hx + 22, hy - 18);
+    ctx.lineTo(hx + 12, hy - 24);
+    ctx.lineTo(hx,      hy - 27);
+    ctx.lineTo(hx - 10, hy - 22);
+    ctx.closePath();
+    ctx.fill();
+    // pannband
+    ctx.fillStyle = stoneShadow;
+    ctx.fillRect(hx + 6, hy - 14, 26, 2);
+
+    // ---------- Ansiktsdetaljer (i profil, åt höger) ----------
+    // Ögonhåla (skugga)
+    ctx.fillStyle = stoneShadow;
+    ctx.fillRect(hx + 28, hy - 2, 6, 3);
+    // Ögonbryns-skugga
+    ctx.fillStyle = 'rgba(60,30,10,0.45)';
+    ctx.fillRect(hx + 26, hy - 6, 10, 2);
+    // Näsa — bruten (det ikoniska draget)
+    ctx.fillStyle = stoneShadow;
+    ctx.fillRect(hx + 32, hy + 12, 6, 6);
+    ctx.fillStyle = stoneDark;
+    ctx.fillRect(hx + 30, hy + 16, 8, 3);
+    // Mun
+    ctx.fillStyle = stoneShadow;
+    ctx.fillRect(hx + 26, hy + 25, 6, 2);
+    // Skugga under näsa
+    ctx.fillStyle = 'rgba(60,30,10,0.3)';
+    ctx.fillRect(hx + 28, hy + 20, 6, 3);
+    // Hak-skugga
+    ctx.fillStyle = 'rgba(60,30,10,0.35)';
+    ctx.fillRect(hx + 22, hy + 32, 6, 2);
+
+    // Ceremoniellt skägg (delvis söndrigt, hänger framför hakan)
+    ctx.fillStyle = stoneMid;
+    ctx.fillRect(hx + 18, hy + 36, 8, 14);
+    ctx.fillStyle = stoneShadow;
+    ctx.fillRect(hx + 18, hy + 40, 8, 1);
+    ctx.fillRect(hx + 18, hy + 44, 8, 1);
+
+    // ---------- Erosion / sprickor på kroppen ----------
+    ctx.strokeStyle = 'rgba(40,20,10,0.55)';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(cx - 90, cy - 50); ctx.lineTo(cx - 70, cy - 20);
+    ctx.moveTo(cx - 30, cy - 60); ctx.lineTo(cx - 10, cy - 25);
+    ctx.moveTo(cx + 40, cy - 70); ctx.lineTo(cx + 60, cy - 35);
+    ctx.moveTo(cx + 70, cy - 55); ctx.lineTo(cx + 85, cy - 28);
+    ctx.stroke();
+
+    // små stenskador (mörka prickar)
+    ctx.fillStyle = 'rgba(40,20,10,0.5)';
+    for (let i = 0; i < 14; i++) {
+      const px = cx - 130 + (i * 19) % 240;
+      const py = cy - 8 - ((i * 13) % 80);
+      ctx.fillRect(px, py, 2, 2);
+    }
+
+    // ---------- Sand som täcker basens fot ----------
+    ctx.fillStyle = mixHex('#e8c070', '#1a1240', 1 - dayPhase);
+    ctx.beginPath();
+    ctx.moveTo(cx - 170, cy + 8);
+    ctx.quadraticCurveTo(cx - 90, cy + 2, cx + 20, cy + 6);
+    ctx.quadraticCurveTo(cx + 120, cy + 10, cx + 220, cy + 4);
+    ctx.lineTo(cx + 220, cy + 22);
+    ctx.lineTo(cx - 170, cy + 22);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  function drawQuarry() {
+    const baseY = quarry.y + quarry.h - 2;
+
+    // Sandgolv / damm runt högen
+    ctx.fillStyle = 'rgba(140,90,40,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(quarry.x + quarry.w/2, baseY + 6, quarry.w/2 + 25, 10, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Lösa stenar utspridda framför högen (på sanden)
+    const looseStones = [
+      { x: quarry.x - 18, y: baseY + 6, w: 12, h: 8 },
+      { x: quarry.x + 8,  y: baseY + 8, w: 14, h: 9 },
+      { x: quarry.x + quarry.w - 20, y: baseY + 7, w: 13, h: 9 },
+      { x: quarry.x + quarry.w + 10, y: baseY + 5, w: 14, h: 9 },
+      { x: quarry.x + quarry.w/2 - 8, y: baseY + 10, w: 10, h: 7 },
+    ];
+    for (const s of looseStones) {
+      ctx.fillStyle = '#9a6830';
+      ctx.fillRect(s.x, s.y, s.w, s.h);
+      ctx.fillStyle = '#c89870';
+      ctx.fillRect(s.x, s.y, s.w, s.h - 3);
+      ctx.fillStyle = '#e0b888';
+      ctx.fillRect(s.x + 1, s.y + 1, s.w - 4, 2);
+    }
+
+    // Stenhögen i lager (pyramidalt staplad)
+    function drawStoneBlock(bx, by, bw, bh) {
+      // skugga åt höger
+      ctx.fillStyle = '#7a4818';
+      ctx.fillRect(bx + bw - 3, by + 2, 3, bh - 2);
+      // huvud-kropp
+      ctx.fillStyle = '#b88858';
+      ctx.fillRect(bx, by, bw - 2, bh - 1);
+      // ovansida ljus
+      ctx.fillStyle = '#d8a878';
+      ctx.fillRect(bx, by, bw - 2, 3);
+      // mejsel-spår
+      ctx.fillStyle = 'rgba(80,40,10,0.35)';
+      ctx.fillRect(bx + 2, by + 4, bw - 6, 1);
+      ctx.fillRect(bx + 2, by + bh - 4, bw - 8, 1);
+      // botten-kant mörk
+      ctx.fillStyle = '#6a3818';
+      ctx.fillRect(bx, by + bh - 2, bw - 2, 2);
+    }
+
+    const blockW = 32;
+    const blockH = 22;
+    // Bottenraden — 7 block (bredare bas)
+    for (let i = 0; i < 7; i++) {
+      drawStoneBlock(quarry.x + i*(blockW - 4) - 5, baseY - blockH, blockW, blockH);
+    }
+    // Andra raden — 6 block
+    for (let i = 0; i < 6; i++) {
+      drawStoneBlock(quarry.x + 10 + i*(blockW - 4), baseY - blockH*2 + 3, blockW - 2, blockH);
+    }
+    // Tredje raden — 5 block
+    for (let i = 0; i < 5; i++) {
+      drawStoneBlock(quarry.x + 24 + i*(blockW - 4), baseY - blockH*3 + 6, blockW - 4, blockH);
+    }
+    // Fjärde raden — 3 block
+    for (let i = 0; i < 3; i++) {
+      drawStoneBlock(quarry.x + 50 + i*(blockW - 4), baseY - blockH*4 + 8, blockW - 6, blockH - 1);
+    }
+    // Femte raden — 2 block
+    drawStoneBlock(quarry.x + 70, baseY - blockH*5 + 10, blockW - 8, blockH - 2);
+    drawStoneBlock(quarry.x + 96, baseY - blockH*5 + 11, blockW - 10, blockH - 3);
+    // Toppen — 1 block
+    drawStoneBlock(quarry.x + 88, baseY - blockH*6 + 12, blockW - 12, blockH - 4);
+
+    // Skylt på en planka stickande upp
+    const signX = quarry.x + quarry.w/2;
+    const signY = quarry.y - 28;
+    // stång
+    ctx.fillStyle = '#5a3818';
+    ctx.fillRect(signX - 2, signY + 8, 4, 22);
+    // planka
+    ctx.fillStyle = '#a87038';
+    ctx.fillRect(signX - 32, signY - 4, 64, 18);
+    ctx.fillStyle = '#c89058';
+    ctx.fillRect(signX - 32, signY - 4, 64, 4);
+    // text
+    ctx.fillStyle = '#2a1408';
+    ctx.font = 'bold 12px Georgia';
+    ctx.textAlign = 'center';
+    ctx.fillText('QUARRY', signX, signY + 9);
+  }
+
+  function drawBigPyramid() {
+    ctx.strokeStyle = 'rgba(80,40,10,0.5)';
+    ctx.setLineDash([4, 4]);
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    const baseW = PYR_ROWS * PYR_BLOCK_W;
+    ctx.moveTo(PYR_BASE_X - baseW/2 - 4, PYR_BASE_Y + 2);
+    ctx.lineTo(PYR_BASE_X + baseW/2 + 4, PYR_BASE_Y + 2);
+    ctx.stroke();
+    ctx.setLineDash([]);
+    ctx.strokeStyle = 'rgba(60,30,10,0.25)';
+    ctx.beginPath();
+    ctx.moveTo(PYR_BASE_X - baseW/2, PYR_BASE_Y);
+    ctx.lineTo(PYR_BASE_X, PYR_BASE_Y - PYR_ROWS * PYR_BLOCK_H);
+    ctx.lineTo(PYR_BASE_X + baseW/2, PYR_BASE_Y);
+    ctx.stroke();
+
+    for (let i = 0; i < state.blocksPlaced; i++) {
+      const p = pyramidBlockPos(i);
+      if (!p) break;
+      ctx.fillStyle = '#d8b070';
+      ctx.fillRect(p.x - PYR_BLOCK_W/2, p.y - PYR_BLOCK_H/2, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1);
+      ctx.fillStyle = '#b88848';
+      ctx.fillRect(p.x - PYR_BLOCK_W/2, p.y + PYR_BLOCK_H/2 - 3, PYR_BLOCK_W - 1, 2);
+      ctx.fillStyle = '#a07030';
+      ctx.fillRect(p.x + PYR_BLOCK_W/2 - 2, p.y - PYR_BLOCK_H/2, 1, PYR_BLOCK_H - 1);
+    }
+  }
+
+  function drawTorches(dayPhase) {
+    // facklor runt byggplatsen, tänds när mörkt
+    const intensity = 1 - dayPhase;
+    const torches = [
+      {x: 470, y: 480},
+      {x: 810, y: 480},
+      {x: 280, y: 510},
+      {x: 750, y: 540},
+    ];
+    for (const t of torches) {
+      // stång
+      ctx.fillStyle = '#5a3818';
+      ctx.fillRect(t.x - 2, t.y, 4, 30);
+      // flamma
+      const flick = Math.sin(state.time*0.3 + t.x) * 2;
+      ctx.fillStyle = `rgba(255,140,40,${0.9 * intensity})`;
+      ctx.beginPath();
+      ctx.ellipse(t.x, t.y - 4 + flick, 5, 10, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = `rgba(255,220,120,${intensity})`;
+      ctx.beginPath();
+      ctx.ellipse(t.x, t.y - 2 + flick, 2, 5, 0, 0, Math.PI*2);
+      ctx.fill();
+      // glöd-ljus
+      const g = ctx.createRadialGradient(t.x, t.y, 5, t.x, t.y, 80);
+      g.addColorStop(0, `rgba(255,180,80,${0.25*intensity})`);
+      g.addColorStop(1, 'rgba(255,180,80,0)');
+      ctx.fillStyle = g;
+      ctx.fillRect(t.x - 80, t.y - 80, 160, 160);
+    }
+  }
+
+  function drawPharaoh(p) {
+    const x = p.x, y = p.y;
+    const f = p.facing;
+    const bob = Math.sin(p.walkPhase)*2;
+
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + 22, 16, 4, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    ctx.fillStyle = '#c08858';
+    const legSwing = Math.sin(p.walkPhase) * 4;
+    ctx.fillRect(x - 6, y + 4, 5, 18 + legSwing);
+    ctx.fillRect(x + 1, y + 4, 5, 18 - legSwing);
+
+    ctx.fillStyle = '#fff8e0';
+    ctx.fillRect(x - 11, y - 4, 22, 14);
+    ctx.fillStyle = '#e8c050';
+    ctx.fillRect(x - 11, y + 8, 22, 3);
+
+    ctx.fillStyle = '#c89060';
+    ctx.fillRect(x - 9, y - 16 + bob, 18, 14);
+
+    ctx.fillStyle = '#f4d050';
+    ctx.beginPath();
+    ctx.ellipse(x, y - 12 + bob, 14, 5, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.strokeStyle = '#a07020';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.ellipse(x, y - 12 + bob, 14, 5, 0, 0, Math.PI*2);
+    ctx.stroke();
+
+    ctx.fillStyle = '#c89060';
+    ctx.fillRect(x - 12*f, y - 14 + bob, 4, 14);
+    if (p.whipPhase > 0.2) {
+      ctx.fillRect(x + 4*f, y - 16 + bob, 12*f, 4);
+    } else {
+      ctx.fillRect(x + 8*f, y - 14 + bob, 4, 14);
+    }
+
+    ctx.fillStyle = '#c89060';
+    ctx.fillRect(x - 8, y - 30 + bob, 16, 14);
+
+    ctx.fillStyle = '#3868c0';
+    ctx.fillRect(x - 9, y - 34 + bob, 18, 8);
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(x - 9, y - 30 + bob, 18, 2);
+    ctx.fillStyle = '#3868c0';
+    ctx.fillRect(x - 9, y - 26 + bob, 18, 2);
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(x - 9, y - 22 + bob, 18, 2);
+    ctx.fillStyle = '#3868c0';
+    ctx.fillRect(x - 11, y - 22 + bob, 3, 8);
+    ctx.fillRect(x + 8, y - 22 + bob, 3, 8);
+
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(x - 2, y - 36 + bob, 4, 4);
+    ctx.fillStyle = '#a08020';
+    ctx.fillRect(x - 1, y - 33 + bob, 2, 2);
+
+    ctx.fillStyle = '#2a1a08';
+    ctx.fillRect(x - 4 + (f > 0 ? 1 : 0), y - 22 + bob, 2, 2);
+    ctx.fillRect(x + 2 + (f > 0 ? 1 : 0), y - 22 + bob, 2, 2);
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(x - 1, y - 16 + bob, 3, 5);
+
+    if (p.whipPhase < 0.2) {
+      ctx.strokeStyle = '#3a2010';
+      ctx.lineWidth = 2;
+      ctx.beginPath();
+      ctx.moveTo(x + 10*f, y - 8 + bob);
+      ctx.quadraticCurveTo(x + 18*f, y + 4, x + 14*f, y + 14);
+      ctx.stroke();
+      ctx.fillStyle = '#f4d050';
+      ctx.fillRect(x + 9*f, y - 10 + bob, 3, 4);
+    }
+  }
+
+  function drawWorker(w) {
+    const x = w.x, y = w.y;
+
+    if (w.state === 'downed') { drawDownedWorker(w); return; }
+
+    // Sphinx-sittare = alltid korslagda ben och sittpose
+    const onSphinx = w.atRestZone && w.restZone && w.restZone.onSphinx;
+    // sov-posen visas BARA när de faktiskt nått vilo-platsen — annars ritas de gående
+    const isSleeping = w.state === 'lazy' && w.lazyAction === 'sleeping' && w.atRestZone && !onSphinx;
+    const isSitting = w.state === 'lazy' && w.atRestZone && onSphinx;
+    const isLazyStanding = w.state === 'lazy' && !isSleeping && !isSitting;
+    const bob = (isSleeping ? 0 :
+                 isLazyStanding ? Math.sin(w.walkPhase)*3 :
+                 Math.sin(w.walkPhase)*2);
+
+    // Skugga (ritas innan scale)
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    const shadowW = w.type === 'fat' ? 14 : (w.type === 'child' ? 8 : 11);
+    ctx.ellipse(x, y + 16, shadowW, 3, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Skala beroende på typ (förankrad vid fötterna)
+    ctx.save();
+    if (w.type === 'child') {
+      ctx.translate(x, y + 22);
+      ctx.scale(0.72, 0.72);
+      ctx.translate(-x, -(y + 22));
+    } else if (w.type === 'fat') {
+      ctx.translate(x, y + 22);
+      ctx.scale(1.22, 0.98);
+      ctx.translate(-x, -(y + 22));
+    }
+    // Plockar upp sten — böjer sig (squash på y-axeln, fötterna på marken)
+    if (w.pickupTimer > 0 && !w.carrying) {
+      const phase = w.pickupTimer / 36; // 1 → 0
+      const bend = 0.55 + phase * 0.45;  // 1.0 vid start, 0.55 i botten av rörelsen
+      // sinus-rörelse: ned snabbt, upp långsamt
+      const t = 1 - phase; // 0 → 1
+      const squash = 1 - Math.sin(t * Math.PI) * 0.4;
+      ctx.translate(x, y + 22);
+      ctx.scale(1, squash);
+      ctx.translate(-x, -(y + 22));
+    }
+
+    if (isSleeping) {
+      // Hopkrupen på sidan, huvudet vilar på armen — helt still
+      const f = w.facing >= 0 ? 1 : -1; // riktning kroppen vetter
+
+      // Underben (uppdragna mot bringan)
+      ctx.fillStyle = w.skin;
+      ctx.beginPath();
+      ctx.ellipse(x + 10*f, y + 14, 9, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+      // Lår
+      ctx.fillStyle = w.kilt;
+      ctx.beginPath();
+      ctx.ellipse(x + 3*f, y + 13, 9, 5, 0, 0, Math.PI*2);
+      ctx.fill();
+
+      // Torso (rund och i sidovy)
+      ctx.fillStyle = w.skin;
+      ctx.beginPath();
+      ctx.ellipse(x - 2*f, y + 9, 11, 6, 0, 0, Math.PI*2);
+      ctx.fill();
+      // tjock person — extra mage-puff
+      if (w.type === 'fat') {
+        ctx.beginPath();
+        ctx.ellipse(x + 2*f, y + 12, 9, 5, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      // Arm (utsträckt under huvudet som kudde)
+      ctx.fillStyle = w.skin;
+      ctx.fillRect(x - 14*f, y + 7, 9*f, 3);
+
+      // Huvud (vilar på armen)
+      ctx.fillStyle = w.skin;
+      ctx.beginPath();
+      ctx.arc(x - 11*f, y + 6, 5, 0, Math.PI*2);
+      ctx.fill();
+
+      // Hår på kvinna (hänger ner mot armen)
+      if (w.type === 'woman' && w.hair) {
+        ctx.fillStyle = w.hair;
+        ctx.fillRect(x - 13*f, y + 2, 4, 6);
+        ctx.fillRect(x - 9*f, y + 1, 6, 4);
+      }
+      // Lugg på barn
+      if (w.type === 'child') {
+        ctx.fillStyle = '#1a0e08';
+        ctx.fillRect(x - 14*f, y + 2, 6, 2);
+      }
+
+      // Slutet öga (sluten linje)
+      ctx.strokeStyle = '#2a1a08';
+      ctx.lineWidth = 1.4;
+      ctx.beginPath();
+      ctx.moveTo(x - 13*f, y + 6);
+      ctx.lineTo(x - 10*f, y + 6);
+      ctx.stroke();
+      // ögonfrans/sömnstreck
+      ctx.beginPath();
+      ctx.moveTo(x - 13*f, y + 7);
+      ctx.lineTo(x - 12*f, y + 8);
+      ctx.moveTo(x - 11*f, y + 7);
+      ctx.lineTo(x - 10*f, y + 8);
+      ctx.stroke();
+
+      // liten leende-mun
+      ctx.strokeStyle = '#3a2010';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x - 13*f, y + 9);
+      ctx.quadraticCurveTo(x - 11*f, y + 10, x - 9*f, y + 9);
+      ctx.stroke();
+
+      // Z-stack uppåt
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.font = 'bold 14px Georgia';
+      ctx.lineWidth = 3;
+      ctx.textAlign = 'center';
+      const zPhase = (state.time * 0.04) % 3;
+      ctx.globalAlpha = 1 - (zPhase / 3);
+      const zx = x - 6*f, zy = y - 4 - zPhase * 8;
+      ctx.strokeText('Z', zx, zy);
+      ctx.fillText('Z', zx, zy);
+      ctx.globalAlpha = 1;
+    } else if (isSitting) {
+      // Korslagda ben sittpose (för sphinx-toppen)
+      const f = w.facing >= 0 ? 1 : -1;
+      const sway = Math.sin(state.time * 0.04 + w.walkPhase) * 0.5;
+
+      // Korslagda ben (oval bas)
+      ctx.fillStyle = w.skin;
+      ctx.beginPath();
+      ctx.ellipse(x, y + 12, 14, 5, 0, 0, Math.PI*2);
+      ctx.fill();
+      // Knän som sticker upp
+      ctx.fillStyle = w.skin;
+      ctx.beginPath();
+      ctx.ellipse(x - 8*f, y + 8, 5, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.beginPath();
+      ctx.ellipse(x + 8*f, y + 8, 5, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+      // Kjol/dräkt över knäna
+      ctx.fillStyle = w.kilt;
+      ctx.beginPath();
+      ctx.ellipse(x, y + 7, 13, 5, 0, 0, Math.PI*2);
+      ctx.fill();
+      if (w.type === 'woman') {
+        ctx.fillRect(x - 9, y - 2, 18, 11);
+      }
+
+      // Torso
+      ctx.fillStyle = w.skin;
+      ctx.fillRect(x - 6, y - 8 + sway, 12, 11);
+
+      // Mage för tjock
+      if (w.type === 'fat') {
+        ctx.beginPath();
+        ctx.ellipse(x, y - 2 + sway, 11, 6, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      // Armar vilar på knäna
+      ctx.fillStyle = w.skin;
+      ctx.fillRect(x - 9, y - 4 + sway, 3, 10);
+      ctx.fillRect(x + 6, y - 4 + sway, 3, 10);
+
+      // Huvud
+      ctx.fillStyle = w.skin;
+      ctx.fillRect(x - 5, y - 18 + sway, 10, 10);
+
+      // Hår
+      if (w.type === 'woman' && w.hair) {
+        ctx.fillStyle = w.hair;
+        ctx.fillRect(x - 6, y - 14 + sway, 2, 12);
+        ctx.fillRect(x + 4, y - 14 + sway, 2, 12);
+        ctx.fillRect(x - 6, y - 20 + sway, 12, 3);
+        ctx.fillStyle = '#f4d050';
+        ctx.fillRect(x - 6, y - 18 + sway, 12, 1);
+      } else if (w.type === 'child') {
+        ctx.fillStyle = '#1a0e08';
+        ctx.fillRect(x - 5, y - 20 + sway, 10, 3);
+      }
+
+      // Ögon (riktade åt facing-håll)
+      ctx.fillStyle = '#2a1a08';
+      ctx.fillRect(x - 3 + (f > 0 ? 1 : 0), y - 14 + sway, 2, 2);
+      ctx.fillRect(x + 1 + (f > 0 ? 1 : 0), y - 14 + sway, 2, 2);
+      // liten leende-mun
+      ctx.strokeStyle = '#3a2010';
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.moveTo(x - 2, y - 10 + sway);
+      ctx.quadraticCurveTo(x, y - 9 + sway, x + 2, y - 10 + sway);
+      ctx.stroke();
+
+      // HP-blod indikatorer (samma som standing)
+      if (w.hp < 60) {
+        ctx.fillStyle = '#8a1010';
+        ctx.fillRect(x - 4, y - 18 + sway, 3, 2);
+      }
+      if (w.hp < 30) {
+        ctx.fillStyle = '#8a1010';
+        ctx.fillRect(x - 5, y - 8 + sway, 4, 3);
+      }
+    } else {
+      const legSwing = Math.sin(w.walkPhase) * 3;
+      ctx.fillStyle = w.skin;
+      ctx.fillRect(x - 4, y + 4, 4, 12 + legSwing);
+      ctx.fillRect(x + 0, y + 4, 4, 12 - legSwing);
+
+      // Klädsel (kvinnor får längre dräkt)
+      ctx.fillStyle = w.kilt;
+      if (w.type === 'woman') {
+        ctx.fillRect(x - 8, y - 4, 16, 18); // längre klänning ner mot benen
+        // dekor-band
+        ctx.fillStyle = '#c89860';
+        ctx.fillRect(x - 8, y + 6, 16, 2);
+      } else {
+        ctx.fillRect(x - 7, y - 2, 14, 8);
+      }
+
+      // Torso (tjocka är bredare och har en mage)
+      ctx.fillStyle = w.skin;
+      if (w.type === 'fat') {
+        ctx.fillRect(x - 8, y - 12 + bob, 16, 12);
+        // utskjutande mage
+        ctx.beginPath();
+        ctx.ellipse(x, y - 4 + bob, 10, 7, 0, 0, Math.PI*2);
+        ctx.fill();
+        // bröstvårta-detalj
+        ctx.fillStyle = mixHex(w.skin, '#000000', 0.3);
+        ctx.fillRect(x - 4, y - 8 + bob, 1, 1);
+        ctx.fillRect(x + 3, y - 8 + bob, 1, 1);
+        ctx.fillStyle = w.skin;
+      } else {
+        ctx.fillRect(x - 6, y - 12 + bob, 12, 11);
+      }
+
+      if (w.carrying) {
+        ctx.fillRect(x - 8, y - 10 + bob, 3, 8);
+        ctx.fillRect(x + 5, y - 10 + bob, 3, 8);
+      } else {
+        ctx.fillRect(x - 9, y - 10 + bob, 3, 10);
+        ctx.fillRect(x + 6, y - 10 + bob, 3, 10);
+      }
+
+      ctx.fillStyle = w.skin;
+      ctx.fillRect(x - 5, y - 22 + bob, 10, 10);
+
+      // Hår — för kvinna, långt hår bakom och vid sidorna
+      if (w.type === 'woman' && w.hair) {
+        ctx.fillStyle = w.hair;
+        // bakhår (hänger ner längs ryggen)
+        ctx.fillRect(x - 6, y - 22 + bob, 2, 14);
+        ctx.fillRect(x + 4, y - 22 + bob, 2, 14);
+        // luggen / hårband ovanpå huvudet
+        ctx.fillRect(x - 6, y - 24 + bob, 12, 3);
+        // ev. hårsmycke (guldband)
+        ctx.fillStyle = '#f4d050';
+        ctx.fillRect(x - 6, y - 22 + bob, 12, 1);
+      }
+
+      // Hår för barn — kort lugg
+      if (w.type === 'child') {
+        ctx.fillStyle = '#1a0e08';
+        ctx.fillRect(x - 5, y - 24 + bob, 10, 3);
+      }
+
+      ctx.fillStyle = '#2a1a08';
+      ctx.fillRect(x - 3, y - 18 + bob, 2, 2);
+      ctx.fillRect(x + 1, y - 18 + bob, 2, 2);
+      if (w.scared > 0.3) ctx.fillRect(x - 2, y - 14 + bob, 4, 2);
+
+      if (w.carrying) {
+        ctx.fillStyle = '#c89870';
+        ctx.fillRect(x - 9, y - 30 + bob, 18, 8);
+        ctx.fillStyle = '#a07840';
+        ctx.fillRect(x - 9, y - 24 + bob, 18, 2);
+      }
+
+      // HP-skada-tecken: blod på huvudet om låg HP
+      if (w.hp < 60) {
+        ctx.fillStyle = '#8a1010';
+        ctx.fillRect(x - 4, y - 22 + bob, 3, 2);
+        ctx.fillRect(x + 1, y - 20 + bob, 2, 4);
+      }
+      if (w.hp < 30) {
+        ctx.fillStyle = '#8a1010';
+        ctx.fillRect(x - 5, y - 12 + bob, 4, 3);
+        ctx.fillRect(x + 2, y - 8 + bob, 5, 2);
+      }
+
+      if (w.energy < 30) {
+        ctx.fillStyle = '#88ccff';
+        ctx.beginPath();
+        ctx.arc(x + 6, y - 18 + bob, 2, 0, Math.PI*2);
+        ctx.fill();
+      }
+
+      if (w.scared > 0.5) {
+        ctx.fillStyle = '#ffff80';
+        ctx.font = 'bold 14px Georgia';
+        ctx.textAlign = 'center';
+        ctx.fillText('!', x, y - 30 + bob);
+      }
+
+      // Lat-standing-statusikon ovanför huvudet
+      if (isLazyStanding) {
+        let icon = '';
+        let color = '#ff80c0';
+        if (w.lazyAction === 'playing_friend') { icon = '♪'; color = '#80c0ff'; }
+        else if (w.lazyAction === 'playing_animal') { icon = '♥'; color = '#ff8080'; }
+        else if (w.lazyAction === 'dancing') { icon = '♫'; color = '#ffd0a0'; }
+        else if (w.lazyAction === 'sleeping') { icon = 'z'; color = '#b0c0e0'; }
+        ctx.fillStyle = color;
+        ctx.font = 'bold 16px Georgia';
+        ctx.textAlign = 'center';
+        const wobble = Math.sin(state.time * 0.1 + w.walkPhase) * 3;
+        ctx.fillText(icon, x + wobble, y - 32 + bob);
+      }
+    }
+    ctx.restore();
+  }
+
+  function drawDownedWorker(w) {
+    const x = w.x, y = w.y;
+    const f = w.downedFacing;
+    const pool = w.bloodPool;
+    // blodpöl
+    ctx.fillStyle = 'rgba(120,16,16,0.7)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + 14, 22 * pool, 6 * pool, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = 'rgba(80,10,10,0.85)';
+    ctx.beginPath();
+    ctx.ellipse(x - 4*f, y + 14, 12 * pool, 3 * pool, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // liggande kropp (huvudet åt 'f'-håll)
+    ctx.fillStyle = w.skin;
+    ctx.fillRect(x - 14, y + 8, 28, 8);
+    ctx.fillStyle = w.kilt;
+    ctx.fillRect(x - 4, y + 11, 14, 5);
+    // ben (utsträckta åt motsatt håll från huvudet)
+    ctx.fillStyle = w.skin;
+    ctx.fillRect(x + 8*f, y + 10, 16*f, 4);
+    ctx.fillRect(x + 8*f, y + 14, 16*f, 3);
+    // armar
+    ctx.fillRect(x - 18*f, y + 9, 8*f, 3);
+    ctx.fillRect(x - 4*f, y + 6, 6*f, 3);
+
+    // huvud
+    ctx.fillStyle = w.skin;
+    ctx.fillRect(x - 24*f, y + 7, 10*f, 9);
+    // X-ögon (animeras till ~ när nästan färdig att resa sig)
+    ctx.fillStyle = '#2a1a08';
+    ctx.font = 'bold 9px Georgia';
+    ctx.textAlign = 'center';
+    const eyeChar = w.downedTimer < 90 ? '~' : '×';
+    ctx.fillText(eyeChar, x - 21*f, y + 13);
+    ctx.fillText(eyeChar, x - 16*f, y + 13);
+    // blodspår från huvudet
+    ctx.fillStyle = '#7a1010';
+    ctx.fillRect(x - 22*f, y + 15, 8*f, 2);
+
+    // små stänk runt
+    ctx.fillStyle = 'rgba(120,16,16,0.5)';
+    for (let i = 0; i < 4; i++) {
+      const sx = x - 20*f + (i*7*f);
+      ctx.fillRect(sx, y + 17 + (i%2), 2, 2);
+    }
+
+    // skälver lite om snart att resa sig
+    if (w.downedTimer < 120 && (state.time % 8) < 4) {
+      ctx.fillStyle = '#ffffff';
+      ctx.font = 'bold 12px Georgia';
+      ctx.fillText('...', x, y);
+    }
+  }
+
+  function drawBloodSplatters() {
+    for (const s of state.bloodSplatters) {
+      const alpha = Math.min(1, s.life * 1.2) * 0.72;
+      ctx.fillStyle = `rgba(${hexToRgb(s.color)},${alpha})`;
+      // huvudpöl
+      ctx.beginPath();
+      ctx.ellipse(s.x, s.y, s.r, s.r * 0.42, 0, 0, Math.PI*2);
+      ctx.fill();
+      // små satellit-stänk runt — deterministiska från seed
+      for (let i = 0; i < s.blobs; i++) {
+        const a = (s.seed + i) * 2.4;
+        const dr = s.r * (0.5 + (Math.sin(s.seed + i*3.1) * 0.5 + 0.5));
+        const bx = s.x + Math.cos(a) * dr;
+        const by = s.y + Math.sin(a) * dr * 0.5;
+        const br = s.r * 0.25 * (0.7 + (Math.sin(s.seed + i*5.3) * 0.5 + 0.5));
+        ctx.beginPath();
+        ctx.ellipse(bx, by, br, br * 0.5, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+      // mörk inre kärna när färsk
+      if (s.life > 0.6) {
+        const innerA = (s.life - 0.6) / 0.4 * 0.5;
+        ctx.fillStyle = `rgba(20,2,2,${innerA})`;
+        ctx.beginPath();
+        ctx.ellipse(s.x, s.y, s.r * 0.6, s.r * 0.25, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+  }
+
+  function drawChatBubble(b) {
+    const w = b.worker;
+    const text = b.text;
+    const x = w.x + b.offsetX;
+    const y = w.y - 36;
+    const alpha = Math.min(1, b.life * 1.6);
+
+    ctx.save();
+    ctx.globalAlpha = alpha;
+    ctx.font = "13px 'Noto Sans Egyptian Hieroglyphs', 'Segoe UI Historic', Georgia, serif";
+    const tw = ctx.measureText(text).width;
+    const padX = 14, padY = 12;
+    const bw = Math.max(36, tw + padX * 2);
+    const bh = 13 + padY * 2;
+
+    // Bubbla med rundade hörn
+    ctx.fillStyle = '#fff8e0';
+    ctx.strokeStyle = '#3a2010';
+    ctx.lineWidth = 2;
+    const r = 7;
+    ctx.beginPath();
+    ctx.moveTo(x - bw/2 + r, y - bh);
+    ctx.lineTo(x + bw/2 - r, y - bh);
+    ctx.quadraticCurveTo(x + bw/2, y - bh, x + bw/2, y - bh + r);
+    ctx.lineTo(x + bw/2, y - r);
+    ctx.quadraticCurveTo(x + bw/2, y, x + bw/2 - r, y);
+    ctx.lineTo(x - bw/2 + r, y);
+    ctx.quadraticCurveTo(x - bw/2, y, x - bw/2, y - r);
+    ctx.lineTo(x - bw/2, y - bh + r);
+    ctx.quadraticCurveTo(x - bw/2, y - bh, x - bw/2 + r, y - bh);
+    ctx.closePath();
+    ctx.fill();
+    ctx.stroke();
+
+    // Svans (pekar mot kropp)
+    ctx.fillStyle = '#fff8e0';
+    ctx.beginPath();
+    ctx.moveTo(x - 4, y);
+    ctx.lineTo(x + 4, y);
+    ctx.lineTo(x - 1, y + 7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x - 4, y);
+    ctx.lineTo(x - 1, y + 7);
+    ctx.moveTo(x + 4, y);
+    ctx.lineTo(x - 1, y + 7);
+    ctx.stroke();
+
+    // Text
+    ctx.fillStyle = '#2a1408';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText(text, x, y - bh/2 + 1);
+    ctx.restore();
+  }
+
+  function drawBird(b) {
+    // V-formad fågel-silhuett
+    const x = b.x, y = b.y, s = b.size;
+    const dir = b.vx > 0 ? 1 : -1;
+    const flap = Math.sin(b.flap);
+    const wingUp = (flap + 1) * 0.5; // 0..1
+
+    ctx.strokeStyle = 'rgba(40,30,25,0.85)';
+    ctx.lineWidth = 1.6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    // vänster vinge
+    ctx.moveTo(x - s*1.8*dir, y + wingUp * s * 0.6);
+    ctx.quadraticCurveTo(x - s*0.6*dir, y - wingUp*s*1.4, x, y);
+    // höger vinge
+    ctx.moveTo(x, y);
+    ctx.quadraticCurveTo(x + s*0.6*dir, y - wingUp*s*1.4, x + s*1.8*dir, y + wingUp * s * 0.6);
+    ctx.stroke();
+    // liten kropp
+    ctx.fillStyle = 'rgba(40,30,25,0.85)';
+    ctx.beginPath();
+    ctx.ellipse(x, y, s*0.35, s*0.25, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  function drawCrow(c) {
+    const x = c.x, y = c.y;
+    const flap = Math.sin(c.flap) * 4;
+    ctx.fillStyle = '#0a0a0a';
+    // kropp
+    ctx.fillRect(x - 3, y, 6, 3);
+    // vingar
+    ctx.beginPath();
+    ctx.moveTo(x - 3, y);
+    ctx.lineTo(x - 10, y - 4 - flap);
+    ctx.lineTo(x - 5, y - 1);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + 3, y);
+    ctx.lineTo(x + 10, y - 4 - flap);
+    ctx.lineTo(x + 5, y - 1);
+    ctx.closePath();
+    ctx.fill();
+  }
+
+  // ---------- Color helpers ----------
+  function hexToRgbArr(hex) {
+    const h = hex.replace('#','');
+    return [parseInt(h.slice(0,2),16), parseInt(h.slice(2,4),16), parseInt(h.slice(4,6),16)];
+  }
+  function hexToRgb(hex) {
+    const a = hexToRgbArr(hex);
+    return `${a[0]},${a[1]},${a[2]}`;
+  }
+  function mixHex(a, b, t) {
+    const A = hexToRgbArr(a), B = hexToRgbArr(b);
+    const r = Math.round(A[0] + (B[0]-A[0])*t);
+    const g = Math.round(A[1] + (B[1]-A[1])*t);
+    const bl = Math.round(A[2] + (B[2]-A[2])*t);
+    return `rgb(${r},${g},${bl})`;
+  }
+
+  // ---------- Game loop ----------
+  let frameCounter = 0;
+  function loop() {
+    frameCounter++;
+
+    // Kill-zoom timer går alltid (även när world är frusen i slow-mo)
+    if (killZoom.active) {
+      killZoom.timer--;
+      if (killZoom.timer <= 0) killZoom.active = false;
+    }
+
+    // Slow-mo: vid zoom-in och hold, uppdatera world var 4:e frame.
+    // Vid zoom-out, accelerera tillbaka (var 2:a frame). Övrigt: normal.
+    let shouldUpdate = true;
+    if (killZoom.active) {
+      const kz = killZoomState();
+      if (kz.phase === 'in' || kz.phase === 'hold') {
+        shouldUpdate = (frameCounter % 4 === 0);
+      } else if (kz.phase === 'out') {
+        shouldUpdate = (frameCounter % 2 === 0);
+      }
+    }
+    if (shouldUpdate) update();
+    draw();
+    requestAnimationFrame(loop);
+  }
+
+  function startGame() {
+    state.running = true;
+    state.won = false;
+    state.score = 0;
+    state.blocksPlaced = 0;
+    state.time = 0;
+    state.dayTime = 0.15;
+    state.cracks.length = 0;
+    state.floaters.length = 0;
+    state.crows.length = 0;
+    state.birds.length = 0;
+    state.bloodSplatters.length = 0;
+    state.chatBubbles.length = 0;
+    workers.length = 0;
+    spawnWorkers(TOTAL_WORKERS);
+    state.animals.length = 0;
+    spawnAnimals(3);
+    pharaoh.x = W/2; pharaoh.y = H*0.72;
+    overlay.classList.add('hidden');
+    buildMusicQueue();
+    startMusic();
+  }
+
+  function showWin() {
+    overlay.innerHTML = `
+      <h1>THE PYRAMID IS COMPLETE!</h1>
+      <p>The Sphinx smiles in the moonlight. Your scribes carve your name in stone — Khufu would be jealous.</p>
+      <p>Final score: <strong>${state.blocksPlaced}</strong> stones placed.</p>
+      <button id="againBtn">Build another</button>
+    `;
+    overlay.classList.remove('hidden');
+    document.getElementById('againBtn').addEventListener('click', startGame);
+  }
+
+  startBtn.addEventListener('click', startGame);
+
+  const muteBtn = document.getElementById('muteBtn');
+  muteBtn.addEventListener('click', () => {
+    audioOn.value = !audioOn.value;
+    muteBtn.textContent = audioOn.value ? '🔊' : '🔇';
+    if (audioOn.value) { if (state.running) startMusic(); }
+    else stopMusic();
+  });
+
+  // Fullscreen
+  const fsBtn = document.getElementById('fsBtn');
+  const frameEl = document.getElementById('frame');
+  fsBtn.addEventListener('click', () => {
+    const fsApi = frameEl.requestFullscreen || frameEl.webkitRequestFullscreen || frameEl.mozRequestFullScreen;
+    if (!document.fullscreenElement && !document.webkitFullscreenElement) {
+      if (fsApi) fsApi.call(frameEl);
+    } else {
+      (document.exitFullscreen || document.webkitExitFullscreen).call(document);
+    }
+  });
+  document.addEventListener('fullscreenchange', () => {
+    frameEl.classList.toggle('fullscreen', !!document.fullscreenElement);
+    fsBtn.textContent = document.fullscreenElement ? '⛶' : '⛶';
+  });
+  document.addEventListener('webkitfullscreenchange', () => {
+    frameEl.classList.toggle('fullscreen', !!document.webkitFullscreenElement);
+  });
+
+  loop();
+})();
+</script>
+</body>
+</html>
