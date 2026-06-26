@@ -795,13 +795,32 @@
   }
   // Hitta en ledig position vid en zon — undvik att hamna ovanpå andra som vilar där
   function pickRestSpot(zone, w) {
-    const spread = zone.onSphinx ? 50 : (zone.atWaterhole ? (WATERHOLE.rx - 18) : 70);
-    const vSpread = zone.onSphinx ? 6 : (zone.atWaterhole ? (WATERHOLE.ry - 10) : 22);
-    // Clamp i samma intervall som arbetar-AI:n tillåter
+    // Vattenhåls-zonen: sitt på bakre stranden, inte mitt i vattnet
+    if (zone.atWaterhole) {
+      const sitXSpread = WATERHOLE.rx - 30;
+      // Sit-y: precis OVANFÖR vattenytan (bakre kanten) så fötterna pekar ner i vattnet
+      const sitYBase = WATERHOLE.cy - WATERHOLE.ry - 4;
+      for (let tries = 0; tries < 8; tries++) {
+        const tx = WATERHOLE.cx + (Math.random() - 0.5) * sitXSpread * 2;
+        const ty = sitYBase + (Math.random() - 0.5) * 6;
+        let clash = false;
+        for (const other of workers) {
+          if (other === w) continue;
+          if (other.state !== 'lazy' || !other.atRestZone) continue;
+          const d = Math.hypot(other.x - tx, other.y - ty);
+          if (d < 26) { clash = true; break; }
+        }
+        if (!clash) return { x: tx, y: ty };
+      }
+      return { x: WATERHOLE.cx + (Math.random() - 0.5) * sitXSpread, y: sitYBase };
+    }
+
+    const spread = zone.onSphinx ? 50 : 70;
+    const vSpread = zone.onSphinx ? 6 : 22;
     const minY = zone.onSphinx ? 380 : 490;
-    const maxY = zone.atWaterhole ? (WATERHOLE.cy + WATERHOLE.ry - 8) : H - 30;
-    const minX = zone.atWaterhole ? (WATERHOLE.cx - WATERHOLE.rx + 18) : 40;
-    const maxX = zone.atWaterhole ? (WATERHOLE.cx + WATERHOLE.rx - 18) : W - 40;
+    const maxY = H - 30;
+    const minX = 40;
+    const maxX = W - 40;
     for (let tries = 0; tries < 6; tries++) {
       const ox = (Math.random() - 0.5) * spread * 2;
       const oy = (Math.random() - 0.5) * vSpread * 2;
@@ -1740,6 +1759,33 @@
       if (e.type === 'w') drawWorker(e.obj);
       else if (e.type === 'a') drawAnimal(e.obj);
       else drawPharaoh(e.obj);
+    }
+
+    // Vatten-overlay över sittande slavar (så de ser ut sitta på stranden med fötterna i vattnet)
+    const waterSurface = mixHex('#5fa8c8', '#1a3050', 1 - dayPhase);
+    for (const w of workers) {
+      if (w.state !== 'lazy' || !w.atRestZone) continue;
+      if (!w.restZone || !w.restZone.atWaterhole) continue;
+      // Vattnet täcker fötterna och nedre delen av benen
+      ctx.fillStyle = waterSurface;
+      ctx.globalAlpha = 0.72;
+      ctx.beginPath();
+      ctx.ellipse(w.x, w.y + 10, 18, 5.5, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.globalAlpha = 1;
+      // En liten ripple på ytan kring deras fötter
+      ctx.strokeStyle = `rgba(255,255,255,${0.45 * (0.4 + dayPhase * 0.6)})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.ellipse(w.x, w.y + 10, 15, 4, 0, 0, Math.PI*2);
+      ctx.stroke();
+      // Liten våg-streck bredvid
+      ctx.beginPath();
+      ctx.ellipse(w.x - 12, w.y + 12, 4, 1.5, 0, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(w.x + 12, w.y + 12, 4, 1.5, 0, 0, Math.PI*2);
+      ctx.stroke();
     }
 
     // Pratbubblor över de som har en
