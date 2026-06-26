@@ -467,6 +467,7 @@
       atRestZone: false,
       facing: 1,
       pickupTimer: 0,
+      kissTimer: 0,
     };
   }
   function spawnWorkers(n) {
@@ -504,6 +505,7 @@
   }
 
   function updateAnimal(a) {
+    if (a.state === 'dead') return;
     a.stateTimer--;
     // bli skrämd om farao är nära
     const dxp = pharaoh.x - a.x, dyp = pharaoh.y - a.y;
@@ -568,6 +570,44 @@
   function drawAnimal(a) {
     const x = a.x, y = a.y;
     const f = a.facing;
+
+    // Död katt — ligger på sidan med blodpöl
+    if (a.state === 'dead') {
+      const df = a.deadFacing || 1;
+      ctx.fillStyle = 'rgba(0,0,0,0.25)';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 5, 14, 3, 0, 0, Math.PI*2);
+      ctx.fill();
+      // kropp på sidan
+      ctx.fillStyle = a.color;
+      ctx.fillRect(x - 10, y - 2, 20, 6);
+      // ben sträckta ut
+      ctx.fillRect(x - 8, y + 4, 4, 3);
+      ctx.fillRect(x - 2, y + 4, 4, 3);
+      ctx.fillRect(x + 4, y + 4, 4, 3);
+      // huvud på sidan
+      ctx.fillRect(x + 10*df, y - 2, 7, 7);
+      // X-ögon
+      ctx.strokeStyle = '#1a0a04';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x + 11*df, y);
+      ctx.lineTo(x + 14*df, y + 3);
+      ctx.moveTo(x + 14*df, y);
+      ctx.lineTo(x + 11*df, y + 3);
+      ctx.stroke();
+      // utstickad tunga
+      ctx.fillStyle = '#c01818';
+      ctx.fillRect(x + 16*df, y + 3, 3, 2);
+      // svans slappa
+      ctx.fillStyle = a.color;
+      ctx.fillRect(x - 14*df, y + 1, 4*df, 2);
+      // blodstrimma från huvudet
+      ctx.fillStyle = '#7a1010';
+      ctx.fillRect(x + 12*df, y + 5, 6*df, 2);
+      return;
+    }
+
     const bob = (a.state === 'wander' || a.state === 'chased') ? Math.sin(a.walkPhase)*1.5 : 0;
 
     // skugga
@@ -678,6 +718,23 @@
       ctx.font = 'bold 12px Georgia';
       ctx.textAlign = 'center';
       ctx.fillText('!', x, y - 15);
+    }
+
+    // Blod-överlägg på skadade katter
+    if (a.blood && a.blood > 0) {
+      ctx.fillStyle = '#8a1010';
+      // små röda fläckar på kroppen
+      const marks = Math.min(5, a.blood);
+      const seed = (a.x | 0) * 7;
+      for (let i = 0; i < marks; i++) {
+        const sx = x - 6 + ((seed + i * 11) % 14);
+        const sy = y - 4 + ((seed + i * 17) % 6) + bob;
+        ctx.fillRect(sx, sy, 2, 2);
+      }
+      // blod-droppe vid svansen för skadat
+      if (a.blood >= 3) {
+        ctx.fillRect(x - 12*f, y - 4 + bob, 2, 4);
+      }
     }
   }
 
@@ -890,6 +947,63 @@
         if (w.hp <= 0) downWorker(w);
       }
     }
+    // Träffa katter också
+    for (const a of state.animals) {
+      if (a.state === 'dead') continue;
+      const dx = a.x - pharaoh.x;
+      const dy = a.y - pharaoh.y;
+      const d = Math.hypot(dx, dy);
+      if (d < reach && Math.sign(dx) === pharaoh.facing) {
+        hit = true;
+        a.hp -= 30;
+        a.blood = Math.min(5, (a.blood || 0) + 1);
+        a.state = 'chased';
+        a.stateTimer = 100;
+        spawnFloater(a.x, a.y - 18, '*MJAU!*', '#ff8888');
+        // blod-spray från katt
+        for (let i = 0; i < 8; i++) {
+          state.cracks.push({
+            x: a.x + (Math.random()-0.5)*8,
+            y: a.y - 2 + (Math.random()-0.5)*6,
+            vx: (Math.random()-0.5)*3,
+            vy: -Math.random()*2 - 0.5,
+            life: 1.0,
+            color: '#a01818',
+            grav: 0.2,
+          });
+        }
+        // liten blod-dekal under katten
+        state.bloodSplatters.push({
+          x: a.x + (Math.random()-0.5)*8,
+          y: a.y + 5,
+          r: 3 + Math.random()*3,
+          life: 1.0,
+          decay: 0.0015,
+          color: '#7a0a0a',
+          blobs: 2,
+          seed: Math.random()*1000,
+        });
+        if (a.hp <= 0) {
+          a.state = 'dead';
+          a.deadFacing = a.facing || (Math.random() < 0.5 ? -1 : 1);
+          // stor död-pöl
+          for (let i = 0; i < 10; i++) {
+            state.bloodSplatters.push({
+              x: a.x + (Math.random()-0.5)*24,
+              y: a.y + 6 + (Math.random()-0.5)*6,
+              r: 3 + Math.random()*5,
+              life: 1.0,
+              decay: 0.0008,
+              color: Math.random() < 0.5 ? '#5a0606' : '#380404',
+              blobs: 3,
+              seed: Math.random()*1000,
+            });
+          }
+          spawnFloater(a.x, a.y - 25, '✝', '#cc2020');
+        }
+      }
+    }
+
     if (!hit) {
       spawnFloater(pharaoh.x + pharaoh.facing*60, pharaoh.y - 20, '*CRACK*', '#ffffff');
     }
@@ -1089,10 +1203,49 @@
             w.lazyTarget = workers.find(o => o !== w && o.state === 'lazy' && o.lazyAction === 'playing_friend');
           }
           if (w.lazyTarget) {
-            const dx = w.lazyTarget.x - w.x, dy = w.lazyTarget.y - w.y;
+            const partner = w.lazyTarget;
+            const dx = partner.x - w.x, dy = partner.y - w.y;
             const d = Math.hypot(dx, dy);
-            // jaga och cirkulera — men rör dig sakta, teleportera aldrig
-            if (d > 40) {
+
+            // Pussa-läge: triggas ibland när de är nära varandra
+            if ((!w.kissTimer || w.kissTimer <= 0) && d < 50 && Math.random() < 0.0025) {
+              w.kissTimer = 90;
+              if (partner.lazyAction === 'playing_friend') {
+                partner.kissTimer = 90;
+                partner.lazyTarget = w; // de vänder sig mot varandra
+              }
+            }
+
+            if (w.kissTimer && w.kissTimer > 0) {
+              w.kissTimer--;
+              // Stå riktigt nära partnern, ansikte mot ansikte
+              const side = (partner.x >= w.x ? -1 : 1);
+              const tx = partner.x + side * 12;
+              const ty = partner.y;
+              const odx = tx - w.x, ody = ty - w.y;
+              const od = Math.hypot(odx, ody);
+              if (od > 0.5) {
+                const step = Math.min(od, 1.5);
+                w.x += (odx / od) * step;
+                w.y += (ody / od) * step;
+              }
+              w.facing = -side;
+              w.walkPhase = 0;
+              // Hjärtan svävar upp mellan dem
+              if (Math.random() < 0.18) {
+                state.cracks.push({
+                  x: (w.x + partner.x)/2 + (Math.random()-0.5)*10,
+                  y: Math.min(w.y, partner.y) - 24,
+                  vx: (Math.random()-0.5)*0.3,
+                  vy: -0.55 - Math.random()*0.3,
+                  life: 1.0,
+                  color: '#ff80a0',
+                  grav: -0.018,
+                  heart: true,
+                });
+              }
+            } else if (d > 40) {
+              // jaga
               w.x += (dx/d) * 1.1;
               w.y += (dy/d) * 1.1;
               w.walkPhase += 0.25;
@@ -3354,9 +3507,22 @@
         ctx.fillRect(x - 6, y - 12 + bob, 12, 11);
       }
 
+      // Dansande arbetare viftar med armarna alternerande
+      const isDancing = isLazyStanding && w.lazyAction === 'dancing';
       if (w.carrying) {
         ctx.fillRect(x - 8, y - 10 + bob, 3, 8);
         ctx.fillRect(x + 5, y - 10 + bob, 3, 8);
+      } else if (isDancing) {
+        const sin = Math.sin(w.walkPhase);
+        // vänster arm högt när sin > 0, höger arm högt när sin < 0
+        const liftL = Math.max(0, sin) * 12;
+        const liftR = Math.max(0, -sin) * 12;
+        // armar utåt + uppåt
+        ctx.fillRect(x - 11 - liftL * 0.4, y - 10 + bob - liftL, 3, 10);
+        ctx.fillRect(x + 8 + liftR * 0.4, y - 10 + bob - liftR, 3, 10);
+        // händer (små rutor i slutet av armen)
+        ctx.fillRect(x - 12 - liftL * 0.5, y - 12 + bob - liftL, 3, 3);
+        ctx.fillRect(x + 9 + liftR * 0.5, y - 12 + bob - liftR, 3, 3);
       } else {
         ctx.fillRect(x - 9, y - 10 + bob, 3, 10);
         ctx.fillRect(x + 6, y - 10 + bob, 3, 10);
