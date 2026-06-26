@@ -519,8 +519,14 @@
       const r = Math.random();
       if (r < 0.45) {
         a.state = 'wander';
-        // 65% av gångerna sikta mot en vilo-zon, annars helt slumpmässigt
-        if (Math.random() < 0.65) {
+        // 30% chans att dricka vid vattenhålet, 45% mot vilo-zon, annars slump
+        const choice = Math.random();
+        if (choice < 0.30) {
+          a.target = {
+            x: WATERHOLE.cx + (Math.random()-0.5)*(WATERHOLE.rx*2 - 30),
+            y: WATERHOLE.cy + (Math.random()-0.5)*(WATERHOLE.ry*2 - 14),
+          };
+        } else if (choice < 0.75) {
           const z = pickRestZone();
           a.target = {
             x: z.x + (Math.random()-0.5)*120,
@@ -769,24 +775,33 @@
 
   const quarry = { x: 120, y: 540, w: 200, h: 115 };
 
+  // ---------- Runt vattenhål i nedre-högra hörnet ----------
+  const WATERHOLE = {
+    cx: 1080,
+    cy: 685,
+    rx: 130,
+    ry: 40,
+  };
+
   // ---------- Rest zones (where slackers go to escape work) ----------
   const REST_ZONES = [
-    { x: 75,   y: 670, name: 'left',   facing: 1,  onSphinx: false },
-    { x: 1200, y: 680, name: 'right',  facing: -1, onSphinx: false },
-    { x: 600,  y: 695, name: 'front',  facing: 1,  onSphinx: false },
-    { x: 380,  y: 410, name: 'sphinx', facing: 1,  onSphinx: true  }, // top of sphinx body
+    { x: 75,   y: 670, name: 'left',      facing: 1,  onSphinx: false, atWaterhole: false, seated: false },
+    { x: 600,  y: 690, name: 'front',     facing: 1,  onSphinx: false, atWaterhole: false, seated: false },
+    { x: 380,  y: 410, name: 'sphinx',    facing: 1,  onSphinx: true,  atWaterhole: false, seated: true  },
+    { x: 1080, y: 685, name: 'waterhole', facing: -1, onSphinx: false, atWaterhole: true,  seated: true  },
   ];
   function pickRestZone() {
     return REST_ZONES[Math.floor(Math.random() * REST_ZONES.length)];
   }
   // Hitta en ledig position vid en zon — undvik att hamna ovanpå andra som vilar där
   function pickRestSpot(zone, w) {
-    const spread = zone.onSphinx ? 50 : 70;
-    const vSpread = zone.onSphinx ? 6 : 22;
-    // Clamp i samma intervall som arbetar-AI:n tillåter — annars går de mot ett ouppnåligt mål
+    const spread = zone.onSphinx ? 50 : (zone.atWaterhole ? (WATERHOLE.rx - 18) : 70);
+    const vSpread = zone.onSphinx ? 6 : (zone.atWaterhole ? (WATERHOLE.ry - 10) : 22);
+    // Clamp i samma intervall som arbetar-AI:n tillåter
     const minY = zone.onSphinx ? 380 : 490;
-    const maxY = H - 30;
-    const minX = 40, maxX = W - 40;
+    const maxY = zone.atWaterhole ? (WATERHOLE.cy + WATERHOLE.ry - 8) : H - 30;
+    const minX = zone.atWaterhole ? (WATERHOLE.cx - WATERHOLE.rx + 18) : 40;
+    const maxX = zone.atWaterhole ? (WATERHOLE.cx + WATERHOLE.rx - 18) : W - 40;
     for (let tries = 0; tries < 6; tries++) {
       const ox = (Math.random() - 0.5) * spread * 2;
       const oy = (Math.random() - 0.5) * vSpread * 2;
@@ -854,7 +869,7 @@
     let hit = false;
     for (const w of workers) {
       if (w.enteringFrom) continue;
-      if (w.state === 'downed') continue;
+      if (w.state === 'downed' || w.state === 'falling') continue;
       const dx = w.x - pharaoh.x;
       const dy = w.y - pharaoh.y;
       const dist = Math.hypot(dx, dy);
@@ -1010,10 +1025,11 @@
   }
 
   function downWorker(w) {
-    // Arbetaren faller — ligger blodig och stilla en stund
-    w.state = 'downed';
-    w.downedTimer = 7 * 60 + Math.floor(Math.random()*120); // 7-9 sekunder
-    w.downedFacing = Math.random() < 0.5 ? -1 : 1;
+    // Arbetaren börjar falla — kommer sen att övergå till 'downed' efter en sek
+    w.state = 'falling';
+    w.fallTimer = 70;  // ~1.2 sek ragdoll-fall
+    w.fallDir = (pharaoh.x > w.x) ? -1 : 1; // faller bort från Farao
+    w.downedFacing = -w.fallDir; // huvudet hamnar bortåt från Farao
     w.bloodPool = 0;
     w.carrying = false;
     w.target = null;
@@ -1106,6 +1122,43 @@
         continue;
       }
 
+      // Faller ner i ragdoll efter dödspisken
+      if (w.state === 'falling') {
+        w.fallTimer--;
+        if (w.fallTimer <= 0) {
+          // Övergå till stupad — landar med en blod-pöl
+          w.state = 'downed';
+          w.downedTimer = 5 * 60 + Math.floor(Math.random()*120);
+          w.bloodPool = 0;
+          // Impact-blod
+          for (let i = 0; i < 14; i++) {
+            state.bloodSplatters.push({
+              x: w.x + (Math.random()-0.5)*32,
+              y: w.y + 8 + (Math.random()-0.5)*8,
+              r: 4 + Math.random()*8,
+              life: 1.0,
+              decay: 0.0007,
+              color: Math.random() < 0.5 ? '#5a0606' : '#380404',
+              blobs: 3,
+              seed: Math.random()*1000,
+            });
+          }
+          // dust-puff från fallet
+          for (let i = 0; i < 8; i++) {
+            state.cracks.push({
+              x: w.x + (Math.random()-0.5)*20,
+              y: w.y + 14,
+              vx: (Math.random()-0.5)*2,
+              vy: -Math.random()*1.5,
+              life: 0.7,
+              color: '#c89870',
+              grav: 0.18,
+            });
+          }
+        }
+        continue;
+      }
+
       // Stupad → ligg still tills timern går ut
       if (w.state === 'downed') {
         w.downedTimer--;
@@ -1149,9 +1202,10 @@
         w.lazyTimer = 0;
         w.lazyTarget = null;
         w.restZone = pickRestZone();
-        // hindra att tjocka eller sängriddare hamnar på sphinx — bara sleepers och dansare där
-        if (w.restZone.onSphinx && (w.lazyAction === 'playing_animal')) {
-          w.restZone = REST_ZONES[Math.floor(Math.random()*3)]; // pick non-sphinx
+        // Djurkär lekare måste kunna gå runt — hindra dem från sittande zoner (sphinx/waterhole)
+        if (w.restZone.seated && w.lazyAction === 'playing_animal') {
+          const standingZones = REST_ZONES.filter(z => !z.seated);
+          w.restZone = standingZones[Math.floor(Math.random() * standingZones.length)];
         }
         w.restSpot = pickRestSpot(w.restZone, w);
         w.atRestZone = false;
@@ -1343,14 +1397,15 @@
           }
           w.vx *= 0.5; w.vy *= 0.5;
         }
-        // håll inom skärm (sphinx-zonen tillåter högre upp)
+        // håll inom skärm (sphinx-zonen tillåter högre upp; vattenhåls-zonen lägre ner)
         const minY = (w.restZone && w.restZone.onSphinx) ? 380 : 490;
+        const maxY = (w.restZone && w.restZone.atWaterhole) ? (WATERHOLE.cy + WATERHOLE.ry - 8) : H - 30;
         w.x = Math.max(40, Math.min(W - 40, w.x));
-        w.y = Math.max(minY, Math.min(H - 30, w.y));
+        w.y = Math.max(minY, Math.min(maxY, w.y));
 
         // Hård pin: sovande och sphinx-sittare ska vara helt stilla
         const pinHere = w.atRestZone && w.restSpot &&
-          (w.lazyAction === 'sleeping' || (w.restZone && w.restZone.onSphinx));
+          (w.lazyAction === 'sleeping' || (w.restZone && w.restZone.seated));
         if (pinHere) {
           w.x = w.restSpot.x;
           w.y = w.restSpot.y;
@@ -1450,7 +1505,7 @@
       }
       // Pinen kör en gång till för säkerhet (sovande + sphinx-sittare)
       if (w.atRestZone && w.restSpot &&
-          (w.lazyAction === 'sleeping' || (w.restZone && w.restZone.onSphinx))) {
+          (w.lazyAction === 'sleeping' || (w.restZone && w.restZone.seated))) {
         w.x = w.restSpot.x; w.y = w.restSpot.y;
       }
     }
@@ -1661,6 +1716,9 @@
 
     // Bestående blod på sanden (under strukturer och arbetare)
     drawBloodSplatters();
+
+    // Runt vattenhål i nedre-högra hörnet
+    drawWaterhole(dayPhase);
 
     // Eldar/facklor som tänds på natten
     if (dayPhase < 0.6) drawTorches(dayPhase);
@@ -3152,6 +3210,110 @@
     }
   }
 
+  function drawWaterhole(dayPhase) {
+    const cx = WATERHOLE.cx, cy = WATERHOLE.cy, rx = WATERHOLE.rx, ry = WATERHOLE.ry;
+
+    // Våt mörk strandkant runt hålet
+    const sandEdge = mixHex('#8a5028', '#1a0e08', 1 - dayPhase);
+    ctx.fillStyle = sandEdge;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx + 8, ry + 6, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Vatten — radial gradient (mörkare i mitten)
+    const surface = mixHex('#5fa8c8', '#1a3050', 1 - dayPhase);
+    const deep    = mixHex('#1e4868', '#08101e', 1 - dayPhase);
+    const grad = ctx.createRadialGradient(cx, cy - 4, 6, cx, cy, rx);
+    grad.addColorStop(0, surface);
+    grad.addColorStop(1, deep);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, rx, ry, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Glansljus vid övre kanten
+    ctx.fillStyle = `rgba(255,255,255,${0.22 * dayPhase})`;
+    ctx.beginPath();
+    ctx.ellipse(cx - 20, cy - ry * 0.6, rx * 0.35, ry * 0.18, 0.15, 0, Math.PI*2);
+    ctx.fill();
+
+    // Koncentriska vågkrusningar
+    const numRipples = 3;
+    for (let i = 0; i < numRipples; i++) {
+      const tt = ((state.time * 0.012) + i / numRipples) % 1;
+      const alpha = (1 - tt) * 0.35 * (0.4 + dayPhase * 0.6);
+      ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.ellipse(cx + 10, cy + 4, rx * 0.3 * tt + 8, ry * 0.3 * tt + 4, 0, 0, Math.PI*2);
+      ctx.stroke();
+    }
+
+    // Små vågstreck spridda över ytan
+    ctx.strokeStyle = `rgba(255,255,255,${0.28 * (0.4 + dayPhase * 0.6)})`;
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      const a = (i / 5 + state.time * 0.003) * Math.PI * 2;
+      const wrx = rx * 0.55 * (0.5 + Math.sin(state.time * 0.04 + i) * 0.3);
+      const wry = ry * 0.55 * (0.5 + Math.sin(state.time * 0.04 + i) * 0.3);
+      const wx = cx + Math.cos(a) * wrx;
+      const wy = cy + Math.sin(a) * wry;
+      ctx.beginPath();
+      ctx.moveTo(wx - 4, wy);
+      ctx.quadraticCurveTo(wx, wy - 1.5, wx + 4, wy);
+      ctx.stroke();
+    }
+
+    // Vass och papyrus vid bakre och sido-kanter
+    const reedColor = mixHex('#4a7818', '#0a2008', 1 - dayPhase);
+    const reedTip = mixHex('#a8c860', '#3a5018', 1 - dayPhase);
+    const reedClusters = [
+      { x: cx - rx - 4, y: cy + 2, n: 4 },
+      { x: cx + rx + 2, y: cy - 4, n: 5 },
+      { x: cx - 60, y: cy - ry, n: 3 },
+      { x: cx + 30, y: cy - ry + 2, n: 3 },
+    ];
+    ctx.strokeStyle = reedColor;
+    ctx.lineWidth = 2;
+    for (const c of reedClusters) {
+      for (let i = 0; i < c.n; i++) {
+        const rx2 = c.x + (i - c.n/2) * 4;
+        const sway = Math.sin(state.time * 0.04 + i + c.x * 0.05) * 2;
+        const top = c.y - 14 - i * 3;
+        ctx.beginPath();
+        ctx.moveTo(rx2, c.y);
+        ctx.lineTo(rx2 + sway, top);
+        ctx.stroke();
+        ctx.fillStyle = reedTip;
+        ctx.beginPath();
+        ctx.ellipse(rx2 + sway, top, 2, 4, 0, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    // Näckrosblad
+    ctx.fillStyle = mixHex('#3a8038', '#0a2010', 1 - dayPhase);
+    const lilies = [
+      { x: cx - 40, y: cy + 8 },
+      { x: cx + 48, y: cy - 6 },
+    ];
+    for (const l of lilies) {
+      const wob = Math.sin(state.time * 0.03 + l.x*0.01) * 0.5;
+      ctx.beginPath();
+      ctx.ellipse(l.x, l.y + wob, 11, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+      // litet hack-snitt i bladet
+      ctx.fillStyle = mixHex('#5fa8c8', '#1a3050', 1 - dayPhase);
+      ctx.beginPath();
+      ctx.moveTo(l.x + 5, l.y + wob);
+      ctx.lineTo(l.x + 11, l.y + wob);
+      ctx.lineTo(l.x + 8, l.y + wob + 1.5);
+      ctx.closePath();
+      ctx.fill();
+      ctx.fillStyle = mixHex('#3a8038', '#0a2010', 1 - dayPhase);
+    }
+  }
+
   function drawTorches(dayPhase) {
     // facklor runt byggplatsen, tänds när mörkt
     const intensity = 1 - dayPhase;
@@ -3266,13 +3428,14 @@
   function drawWorker(w) {
     const x = w.x, y = w.y;
 
+    if (w.state === 'falling') { drawFallingWorker(w); return; }
     if (w.state === 'downed') { drawDownedWorker(w); return; }
 
-    // Sphinx-sittare = alltid korslagda ben och sittpose
-    const onSphinx = w.atRestZone && w.restZone && w.restZone.onSphinx;
+    // Sphinx-sittare och vattenhåls-sittare = alltid korslagda ben och sittpose
+    const seatedZone = w.atRestZone && w.restZone && w.restZone.seated;
     // sov-posen visas BARA när de faktiskt nått vilo-platsen — annars ritas de gående
-    const isSleeping = w.state === 'lazy' && w.lazyAction === 'sleeping' && w.atRestZone && !onSphinx;
-    const isSitting = w.state === 'lazy' && w.atRestZone && onSphinx;
+    const isSleeping = w.state === 'lazy' && w.lazyAction === 'sleeping' && w.atRestZone && !seatedZone;
+    const isSitting = w.state === 'lazy' && w.atRestZone && seatedZone;
     const isLazyStanding = w.state === 'lazy' && !isSleeping && !isSitting;
     const bob = (isSleeping ? 0 :
                  isLazyStanding ? Math.sin(w.walkPhase)*3 :
@@ -3620,6 +3783,13 @@
     ctx.ellipse(x - 4*f, y + 14, 12 * pool, 3 * pool, 0, 0, Math.PI*2);
     ctx.fill();
 
+    // Reser sig sakta upp — sista 240 frames innan de står upp
+    const RISE_DURATION = 240;
+    if (w.downedTimer < RISE_DURATION) {
+      drawRisingWorker(w, 1 - w.downedTimer / RISE_DURATION); // p: 0 → 1
+      return;
+    }
+
     // liggande kropp (huvudet åt 'f'-håll)
     ctx.fillStyle = w.skin;
     ctx.fillRect(x - 14, y + 8, 28, 8);
@@ -3654,11 +3824,222 @@
       ctx.fillRect(sx, y + 17 + (i%2), 2, 2);
     }
 
-    // skälver lite om snart att resa sig
-    if (w.downedTimer < 120 && (state.time % 8) < 4) {
-      ctx.fillStyle = '#ffffff';
-      ctx.font = 'bold 12px Georgia';
-      ctx.fillText('...', x, y);
+  }
+
+  // Ragdoll-fall efter dödspisken — kroppen vrider sig sakta från upprätt till liggande
+  function drawFallingWorker(w) {
+    const x = w.x, y = w.y;
+    const f = w.fallDir;
+    const fallTotal = 70;
+    const p = 1 - (w.fallTimer / fallTotal); // 0 → 1
+    // ease-in (accelererar mot slutet)
+    const eased = p * p * p;
+    // Vinkel: 0 = upprätt, π/2 = liggande åt f-håll
+    const angle = eased * (Math.PI / 2) * f;
+    // wobble — viftande/ragdoll-rörelse
+    const wob = Math.sin(state.time * 0.6) * 0.05 * (1 - eased) + Math.sin(state.time * 0.45) * 0.03;
+
+    ctx.save();
+    ctx.translate(x, y + 14); // pivot vid fötterna
+    ctx.rotate(angle + wob);
+
+    // Ben (slappa)
+    ctx.fillStyle = w.skin;
+    ctx.fillRect(-5, -12, 4, 12);
+    ctx.fillRect(1, -12, 4, 12);
+    // Kilt
+    ctx.fillStyle = w.kilt;
+    if (w.type === 'woman') {
+      ctx.fillRect(-8, -16, 16, 16);
+    } else {
+      ctx.fillRect(-7, -16, 14, 8);
+    }
+    // Torso
+    ctx.fillStyle = w.skin;
+    if (w.type === 'fat') {
+      ctx.fillRect(-8, -28, 16, 12);
+      ctx.beginPath();
+      ctx.ellipse(0, -20, 10, 6, 0, 0, Math.PI*2);
+      ctx.fill();
+    } else {
+      ctx.fillRect(-6, -28, 12, 12);
+    }
+
+    // Slappande armar — viftar med kroppen
+    const armSwing = Math.sin(state.time * 0.5) * 6 * (1 - eased * 0.5);
+    ctx.fillStyle = w.skin;
+    ctx.save();
+    ctx.translate(-7, -22);
+    ctx.rotate(0.3 + armSwing * 0.05);
+    ctx.fillRect(-1.5, 0, 3, 14);
+    ctx.restore();
+    ctx.save();
+    ctx.translate(7, -22);
+    ctx.rotate(-0.3 - armSwing * 0.05);
+    ctx.fillRect(-1.5, 0, 3, 14);
+    ctx.restore();
+
+    // Huvud (hänger bakåt)
+    ctx.fillStyle = w.skin;
+    ctx.save();
+    ctx.translate(0, -34);
+    ctx.rotate(-eased * 0.5);
+    ctx.fillRect(-5, -4, 10, 10);
+    // hår/lugg
+    if (w.type === 'woman' && w.hair) {
+      ctx.fillStyle = w.hair;
+      ctx.fillRect(-6, -6, 12, 3);
+      ctx.fillRect(-6, -4, 2, 10);
+      ctx.fillRect(4, -4, 2, 10);
+    } else if (w.type === 'child') {
+      ctx.fillStyle = '#1a0e08';
+      ctx.fillRect(-5, -6, 10, 3);
+    }
+    // X-ögon
+    ctx.fillStyle = '#2a1a08';
+    ctx.font = 'bold 9px Georgia';
+    ctx.textAlign = 'center';
+    ctx.fillText('×', -2, 5);
+    ctx.fillText('×', 3, 5);
+    // blod på pannan
+    ctx.fillStyle = '#7a1010';
+    ctx.fillRect(-3, -2, 2, 3);
+    ctx.restore();
+
+    // blod-stripa på bringan
+    ctx.fillStyle = '#7a1010';
+    ctx.fillRect(1, -22, 2, 5);
+
+    ctx.restore();
+
+    // Blod-droppar som flyger från kroppen under fallet
+    if (state.time % 3 === 0) {
+      state.cracks.push({
+        x: x + (Math.random()-0.5)*16,
+        y: y - 18 + (Math.random()-0.5)*12,
+        vx: (Math.random()-0.5)*1.5 + f * 0.3,
+        vy: -Math.random()*1 - 0.2,
+        life: 0.8,
+        color: '#8a1010',
+        grav: 0.18,
+      });
+    }
+  }
+
+  // Reser sig sakta — p går från 0 (liggande) till 1 (nästan stående)
+  function drawRisingWorker(w, p) {
+    const x = w.x, y = w.y;
+    const f = w.downedFacing;
+
+    // Wobble — skälver när de pressar sig upp (mest i mitten av rörelsen)
+    const wobbleAmp = Math.sin(state.time * 0.55) * 0.08 * Math.sin(p * Math.PI);
+    // Vinkel: 0 = liggande, π/2 = stående (vrider mot ansiktets riktning)
+    const angle = -(1 - p) * (Math.PI / 2) * f + wobbleAmp;
+
+    ctx.save();
+    // Pivot vid höften, på marken
+    ctx.translate(x, y + 12);
+    ctx.rotate(angle);
+
+    // Ben (nedre) — pressar mot marken
+    ctx.fillStyle = w.skin;
+    ctx.fillRect(-5, -12, 4, 12);
+    ctx.fillRect(1, -12, 4, 12);
+    // Kilt
+    ctx.fillStyle = w.kilt;
+    if (w.type === 'woman') {
+      ctx.fillRect(-8, -16, 16, 16);
+    } else {
+      ctx.fillRect(-7, -16, 14, 8);
+    }
+    // Torso
+    ctx.fillStyle = w.skin;
+    if (w.type === 'fat') {
+      ctx.fillRect(-8, -28, 16, 12);
+      ctx.beginPath();
+      ctx.ellipse(0, -20, 10, 6, 0, 0, Math.PI*2);
+      ctx.fill();
+    } else {
+      ctx.fillRect(-6, -28, 12, 12);
+    }
+
+    // Armar — en propsar mot marken, andra hänger
+    const propPhase = p < 0.7 ? 1 : (1 - (p - 0.7) / 0.3); // 1 → 0
+    if (propPhase > 0.05) {
+      // proppande arm — sträcks ut nedåt-ut för att pressa upp
+      ctx.fillStyle = w.skin;
+      ctx.save();
+      ctx.translate(7, -18);
+      ctx.rotate(propPhase * 1.0); // pekande snett ner-ut
+      ctx.fillRect(-1.5, 0, 3, 18 + propPhase * 4);
+      ctx.restore();
+      // andra arm hänger limp
+      ctx.fillRect(-9, -26, 3, 12);
+    } else {
+      // båda armar hänger
+      ctx.fillStyle = w.skin;
+      ctx.fillRect(-9, -26, 3, 12);
+      ctx.fillRect(6, -26, 3, 12);
+    }
+
+    // Huvud
+    ctx.fillStyle = w.skin;
+    ctx.fillRect(-5, -38, 10, 10);
+
+    // Hår
+    if (w.type === 'woman' && w.hair) {
+      ctx.fillStyle = w.hair;
+      ctx.fillRect(-6, -40, 12, 3);
+      ctx.fillRect(-6, -38, 2, 10);
+      ctx.fillRect(4, -38, 2, 10);
+      ctx.fillStyle = '#f4d050';
+      ctx.fillRect(-6, -38, 12, 1);
+    } else if (w.type === 'child') {
+      ctx.fillStyle = '#1a0e08';
+      ctx.fillRect(-5, -40, 10, 3);
+    }
+
+    // Ögon — X de första 50%, sen halvslutna när de börjar resa sig
+    if (p < 0.5) {
+      ctx.fillStyle = '#2a1a08';
+      ctx.font = 'bold 9px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillText('×', -2, -29);
+      ctx.fillText('×', 3, -29);
+    } else {
+      // slutna ögon med ögonbryn (smärta)
+      ctx.fillStyle = '#2a1a08';
+      ctx.fillRect(-4, -32, 3, 1);
+      ctx.fillRect(2, -32, 3, 1);
+      // ögonbryns-V (grimas)
+      ctx.fillRect(-4, -34, 1, 1);
+      ctx.fillRect(-2, -33, 1, 1);
+      ctx.fillRect(3, -33, 1, 1);
+      ctx.fillRect(5, -34, 1, 1);
+    }
+
+    // Liten grimas-mun
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(-2, -25, 4, 1);
+
+    // Blod på huvudet och bringan (kvar från smiskningen)
+    ctx.fillStyle = '#7a1010';
+    ctx.fillRect(-3, -36, 2, 3);
+    ctx.fillRect(1, -22, 2, 4);
+
+    ctx.restore();
+
+    // Svett-droppar / blod-droppar runt huvudet medan de kämpar
+    if (p > 0.1 && p < 0.9 && state.time % 14 === 0) {
+      state.cracks.push({
+        x: x + (Math.random()-0.5)*12,
+        y: y - 18 - p*8,
+        vx: 0,
+        vy: 0.8,
+        life: 0.6,
+        color: '#8a1010',
+        grav: 0.15,
+      });
     }
   }
 
@@ -3689,6 +4070,21 @@
         ctx.ellipse(s.x, s.y, s.r * 0.6, s.r * 0.25, 0, 0, Math.PI*2);
         ctx.fill();
       }
+    }
+  }
+
+  function drawWaterRipple(cx, ry) {
+    // koncentriska ringar runt fötter där någon står
+    const phase = (state.time * 0.06) % 1;
+    for (let i = 0; i < 2; i++) {
+      const r = 6 + i * 8 + phase * 8;
+      const alpha = (1 - phase) * 0.45 - i * 0.15;
+      if (alpha <= 0) continue;
+      ctx.strokeStyle = `rgba(255,255,255,${alpha})`;
+      ctx.lineWidth = 1.2;
+      ctx.beginPath();
+      ctx.ellipse(cx, ry, r, r * 0.32, 0, 0, Math.PI*2);
+      ctx.stroke();
     }
   }
 
