@@ -2,11 +2,19 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
-<meta name="mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-capable" content="yes">
-<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>Pharaoh's Pyramid</title>
+<script>
+  // Touch-primary devices (phones, tablets) get the "needs a keyboard" landing.
+  // This must run before #frame is parsed so CSS can hide it without flicker.
+  if (window.matchMedia && window.matchMedia('(pointer: coarse)').matches) {
+    document.documentElement.classList.add('no-game');
+  }
+  // ?debug=true reveals dev-only UI (end-intro button, etc.)
+  if (/[?&]debug=true\b/.test(window.location.search)) {
+    document.documentElement.classList.add('debug');
+  }
+</script>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   html, body {
@@ -16,8 +24,6 @@
     font-family: 'Georgia', serif;
     overflow: hidden;
     color: #f4d97a;
-    overscroll-behavior: none;
-    touch-action: none;
   }
   #frame {
     position: relative;
@@ -91,10 +97,6 @@
     width: 100%;
     height: 100%;
     cursor: crosshair;
-    touch-action: none;
-    -webkit-user-select: none;
-    user-select: none;
-    -webkit-touch-callout: none;
   }
   #hud {
     position: absolute;
@@ -178,118 +180,89 @@
   #overlay button:active { transform: translateY(4px); box-shadow: 0 2px 0 #6b3410, 0 4px 12px rgba(0,0,0,0.5); }
   #overlay.hidden { display: none; }
   .hint { font-size: 13px; opacity: 0.55; letter-spacing: 2px; }
+  .debug-btn {
+    margin-top: 8px;
+    padding: 8px 18px !important;
+    font-size: 13px !important;
+    letter-spacing: 1px !important;
+    background: rgba(0,0,0,0.45) !important;
+    color: #c89b3c !important;
+    border: 1px dashed #c89b3c !important;
+    box-shadow: none !important;
+    font-weight: normal !important;
+    opacity: 0.7;
+  }
+  .debug-btn:hover { opacity: 1; }
+  /* Hidden unless URL has ?debug=true — the inline script toggles `html.debug`. */
+  .debug-btn { display: none; }
+  html.debug .debug-btn { display: inline-block; }
+  #skipHint {
+    position: absolute;
+    bottom: 18px;
+    right: 18px;
+    color: rgba(244,216,112,0.55);
+    font-size: 12px;
+    letter-spacing: 2px;
+    z-index: 7;
+    pointer-events: none;
+    text-shadow: 0 1px 2px rgba(0,0,0,0.8);
+  }
+  #skipHint.hidden { display: none; }
+  body.intro #hud { opacity: 0; transition: opacity 0.6s; pointer-events: none; }
 
-  /* ---------- Touch controls ---------- */
-  #touchControls {
-    position: absolute;
-    inset: 0;
-    z-index: 6;
-    pointer-events: none;
-    display: none;
-    touch-action: none;
-    -webkit-user-select: none;
-    user-select: none;
-    -webkit-tap-highlight-color: transparent;
-  }
-  body.touch #touchControls { display: block; }
-  #joyZone, #whipZone {
-    position: absolute;
-    bottom: 0;
-    height: 50%;
-    pointer-events: auto;
-    touch-action: none;
-  }
-  #joyZone  { left: 0;  width: 50%; }
-  #whipZone { right: 0; width: 50%; }
-  #joyBase, #joyStick {
-    position: absolute;
-    border-radius: 50%;
-    pointer-events: none;
-    opacity: 0;
-    transition: opacity 0.15s;
-  }
-  #joyBase {
-    width: 130px; height: 130px;
-    background: rgba(0,0,0,0.28);
-    border: 2px solid rgba(244,208,80,0.55);
-    box-shadow: 0 0 18px rgba(0,0,0,0.4);
-  }
-  #joyStick {
-    width: 64px; height: 64px;
-    background: radial-gradient(circle at 35% 30%, #ffe48a, #c89b3c 70%, #6b3410);
-    border: 2px solid #6b3410;
-    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
-  }
-  #joyZone.active #joyBase,
-  #joyZone.active #joyStick { opacity: 1; }
-  #whipBtn {
-    position: absolute;
-    right: calc(24px + env(safe-area-inset-right, 0px));
-    bottom: calc(24px + env(safe-area-inset-bottom, 0px));
-    width: 96px; height: 96px;
-    border-radius: 50%;
-    background: radial-gradient(circle at 35% 30%, #ffe48a, #c89b3c 65%, #6b3410);
-    border: 3px solid #6b3410;
-    color: #2a1a0a;
-    font-size: 32px;
-    font-weight: bold;
-    font-family: inherit;
+  /* ---------- "Needs a keyboard" landing screen (touch devices) ---------- */
+  #mobileBlock { display: none; }
+  .no-game #frame { display: none !important; }
+  .no-game #mobileBlock {
     display: flex;
+    flex-direction: column;
     align-items: center;
     justify-content: center;
-    box-shadow: 0 6px 0 #6b3410, 0 10px 24px rgba(0,0,0,0.5);
-    pointer-events: auto;
-    touch-action: none;
-    -webkit-tap-highlight-color: transparent;
-    user-select: none;
+    position: fixed;
+    inset: 0;
+    background:
+      radial-gradient(ellipse at 65% 30%, #5a2a14 0%, #1a0a04 70%),
+      #1a0a04;
+    padding: 24px 18px;
+    text-align: center;
+    overflow: hidden;
   }
-  #whipBtn.pressed {
-    transform: translateY(3px);
-    box-shadow: 0 3px 0 #6b3410, 0 5px 12px rgba(0,0,0,0.5);
+  #mobileBlock .scene {
+    width: 100%;
+    max-width: 560px;
+    height: auto;
+    filter: drop-shadow(0 12px 30px rgba(0,0,0,0.6));
   }
-
-  /* ---------- Small-screen layout ---------- */
-  @media (max-width: 820px), (max-height: 600px) {
-    #frame {
-      grid-template-columns: 1fr;
-      grid-template-rows: 1fr;
-      padding: 0;
-      background: #000;
-    }
-    .frieze { display: none; }
-    #wrap {
-      grid-column: 1;
-      grid-row: 1;
-      width: 100vw;
-      height: 100vh;
-      height: 100dvh;
-      border-radius: 0;
-      box-shadow: none;
-    }
-    #hud {
-      padding: 6px 8px;
-      gap: 8px;
-      font-size: 12px;
-      flex-wrap: wrap;
-    }
-    .bar { width: 110px; height: 10px; }
-    .label { font-size: 10px; letter-spacing: 0.5px; }
-    .timeLabel { font-size: 11px; min-width: 0; }
-    #workers { font-size: 12px; }
-    #score { font-size: 16px; }
-    #muteBtn, #fsBtn { padding: 6px 10px; font-size: 14px; min-width: 36px; min-height: 36px; }
-    #overlay h1 { font-size: 36px; letter-spacing: 2px; }
-    #overlay .logo { width: 120px; height: 120px; }
-    #overlay p { font-size: 14px; line-height: 1.4; padding: 0 6px; }
-    #overlay button { padding: 14px 36px; font-size: 22px; letter-spacing: 2px; }
-    .hint { font-size: 11px; letter-spacing: 1px; }
+  #mobileBlock h1 {
+    margin-top: 18px;
+    font-size: clamp(28px, 8vw, 44px);
+    color: #f8d870;
+    letter-spacing: 3px;
+    text-shadow: 3px 3px 0 #6b3410, 0 0 18px rgba(244,216,112,0.35);
+    font-weight: bold;
   }
-
-  @media (max-width: 480px) {
-    #hud .stat .label { display: none; }
-    .bar { width: 80px; }
-    #workers { font-size: 11px; }
-    #score { font-size: 14px; }
+  #mobileBlock .sub {
+    margin-top: 14px;
+    font-size: clamp(15px, 4.5vw, 19px);
+    color: #f4d97a;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+  }
+  #mobileBlock p {
+    margin-top: 12px;
+    max-width: 480px;
+    font-size: clamp(13px, 3.7vw, 15px);
+    line-height: 1.55;
+    color: rgba(244,217,122,0.78);
+    padding: 0 8px;
+  }
+  #mobileBlock .glyph-strip {
+    margin-top: 22px;
+    color: #c89b3c;
+    font-family: 'Noto Sans Egyptian Hieroglyphs', 'Segoe UI Historic', serif;
+    font-size: 24px;
+    letter-spacing: 6px;
+    opacity: 0.7;
   }
 </style>
 </head>
@@ -331,22 +304,245 @@
     </svg>
     <h1>PHARAOH'S PYRAMID</h1>
     <button id="startBtn">PLAY</button>
-    <div class="hint" id="ctrlHint">WASD · SPACE TO WHIP</div>
+    <div class="hint">WASD · SPACE TO WHIP</div>
+    <button id="debugIntroBtn" class="debug-btn" title="Play end-intro (debug)">▶ END-INTRO (DEBUG)</button>
   </div>
-  <div id="touchControls">
-    <div id="joyZone">
-      <div id="joyBase"></div>
-      <div id="joyStick"></div>
-    </div>
-    <div id="whipZone"></div>
-    <button id="whipBtn" type="button" aria-label="Whip">𓂸</button>
-  </div>
+  <div id="skipHint" class="hidden">SPACE / CLICK TO SKIP</div>
   </div><!-- /#wrap -->
   <div class="frieze frieze-side frieze-right">𓀀 𓁹 𓂀 𓆣 𓋹 𓊪 𓏏 𓅓 𓆑 𓀀 𓁹 𓂀 𓆣 𓋹 𓊪 𓏏</div>
   <div class="frieze frieze-bot">𓊪 𓆑 𓇋 𓏤 𓀁 𓆄 𓂁 𓊽 𓊪 𓆑 𓇋 𓏤 𓀁 𓆄 𓂁 𓊽 𓊪 𓆑 𓇋 𓏤 𓀁 𓆄 𓂁</div>
 </div><!-- /#frame -->
+
+<div id="mobileBlock" aria-hidden="true">
+  <svg class="scene" viewBox="0 0 800 520" xmlns="http://www.w3.org/2000/svg" preserveAspectRatio="xMidYMid meet">
+    <defs>
+      <linearGradient id="mbSky" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0"    stop-color="#2a1208"/>
+        <stop offset="0.35" stop-color="#7a2e10"/>
+        <stop offset="0.7"  stop-color="#d87830"/>
+        <stop offset="1"    stop-color="#f4c050"/>
+      </linearGradient>
+      <linearGradient id="mbSand" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0" stop-color="#dba268"/>
+        <stop offset="1" stop-color="#5a3018"/>
+      </linearGradient>
+      <radialGradient id="mbSun" cx="0.5" cy="0.5" r="0.5">
+        <stop offset="0"   stop-color="#fff088"/>
+        <stop offset="0.4" stop-color="#ffc848"/>
+        <stop offset="1"   stop-color="#ffc848" stop-opacity="0"/>
+      </radialGradient>
+    </defs>
+
+    <!-- sky + sun -->
+    <rect width="800" height="520" fill="url(#mbSky)"/>
+    <circle cx="640" cy="150" r="140" fill="url(#mbSun)"/>
+    <circle cx="640" cy="150" r="58"  fill="#fff088"/>
+
+    <!-- distant pyramid -->
+    <path d="M 360,330 L 450,200 L 540,330 Z" fill="#7a4818" opacity="0.55"/>
+
+    <!-- main pyramid -->
+    <path d="M 80,340 L 240,130 L 400,340 Z" fill="#9a5828"/>
+    <path d="M 240,130 L 400,340 L 320,340 Z" fill="#6a3818" opacity="0.65"/>
+    <!-- pyramid courses -->
+    <path d="M 145,290 L 335,290" stroke="#7a4818" stroke-width="1" opacity="0.35"/>
+    <path d="M 175,250 L 305,250" stroke="#7a4818" stroke-width="1" opacity="0.35"/>
+    <path d="M 200,215 L 280,215" stroke="#7a4818" stroke-width="1" opacity="0.35"/>
+
+    <!-- dunes -->
+    <path d="M 0,320 Q 200,295 400,322 T 800,310 L 800,520 L 0,520 Z" fill="url(#mbSand)"/>
+    <path d="M 0,320 Q 200,295 400,322 T 800,310" stroke="#f4c878" stroke-width="2" fill="none" opacity="0.45"/>
+
+    <!-- ============ SLAVE 1 (prostrate, far left) ============ -->
+    <g transform="translate(210,425)">
+      <ellipse cx="0" cy="22" rx="52" ry="6" fill="rgba(20,8,4,0.45)"/>
+      <!-- kneeling leg -->
+      <path d="M -24,8 L 24,12 L 30,20 L -30,20 Z" fill="#a87038"/>
+      <!-- thigh bent forward -->
+      <path d="M -18,-10 L 10,-8 L 22,14 L -10,14 Z" fill="#a87038"/>
+      <!-- loincloth -->
+      <path d="M -24,-22 L 16,-20 L 26,14 L -28,14 Z" fill="#f0e0c0"/>
+      <path d="M -24,-22 L 16,-20 L 16,-14 L -24,-16 Z" fill="#c89058"/>
+      <!-- torso bowed forward -->
+      <path d="M -18,-54 L -2,-52 L 16,-22 L -18,-22 Z" fill="#a87038"/>
+      <!-- arm extended forward begging -->
+      <path d="M -2,-50 Q 18,-32 28,-14 Q 34,-6 36,2" stroke="#a87038" stroke-width="10" fill="none" stroke-linecap="round"/>
+      <!-- back arm hanging -->
+      <path d="M -16,-50 Q -24,-32 -22,-12" stroke="#a87038" stroke-width="9" fill="none" stroke-linecap="round"/>
+      <!-- head bowed -->
+      <g transform="translate(-2,-62) rotate(-22)">
+        <ellipse rx="12" ry="14" fill="#a87038"/>
+        <path d="M -11,-7 Q 0,-16 11,-7 Q 12,5 9,9 L -9,9 Q -12,5 -11,-7 Z" fill="#1a0e08"/>
+      </g>
+    </g>
+
+    <!-- ============ SLAVE 2 (cowering, raised arm shielding face) ============ -->
+    <g transform="translate(355,432)">
+      <ellipse cx="0" cy="16" rx="46" ry="5" fill="rgba(20,8,4,0.45)"/>
+      <!-- folded leg -->
+      <path d="M -17,2 L 20,2 L 25,14 L -22,14 Z" fill="#c08850"/>
+      <!-- thigh -->
+      <path d="M -12,-15 L 14,-12 L 22,2 L -10,2 Z" fill="#c08850"/>
+      <!-- loincloth -->
+      <path d="M -20,-24 L 18,-22 L 24,4 L -22,4 Z" fill="#f0e0c0"/>
+      <path d="M -20,-24 L 18,-22 L 18,-17 L -20,-19 Z" fill="#c89058"/>
+      <!-- torso cowering -->
+      <path d="M -16,-56 L 10,-54 L 18,-24 L -16,-24 Z" fill="#c08850"/>
+      <!-- arm shielding face -->
+      <path d="M 2,-52 Q 16,-62 12,-78 Q 8,-86 0,-86" stroke="#c08850" stroke-width="10" fill="none" stroke-linecap="round"/>
+      <!-- back arm hanging -->
+      <path d="M -14,-50 Q -22,-32 -18,-16" stroke="#c08850" stroke-width="9" fill="none" stroke-linecap="round"/>
+      <!-- head turned up looking at whip with fear -->
+      <g transform="translate(-2,-70)">
+        <ellipse rx="12" ry="14" fill="#c08850"/>
+        <path d="M -11,-7 Q 0,-16 11,-7 Q 12,5 9,9 L -9,9 Q -12,5 -11,-7 Z" fill="#1a0e08"/>
+        <!-- terrified eye -->
+        <ellipse cx="6" cy="0" rx="2.2" ry="2.2" fill="#fff"/>
+        <circle cx="6" cy="0" r="1.3" fill="#1a0a04"/>
+        <!-- open mouth -->
+        <ellipse cx="9" cy="6" rx="1.6" ry="2.4" fill="#3a1408"/>
+      </g>
+    </g>
+
+    <!-- ============ PHARAOH (right side, towering) ============ -->
+    <g transform="translate(620,470)">
+      <!-- shadow -->
+      <ellipse cx="0" cy="6" rx="62" ry="9" fill="rgba(20,8,4,0.5)"/>
+
+      <!-- back leg (planted) -->
+      <path d="M 0,-58 L 14,-58 L 18,6 L 2,6 Z" fill="#b07840"/>
+      <path d="M 12,-58 L 14,-58 L 18,6 L 14,6 Z" fill="#a06830" opacity="0.6"/>
+
+      <!-- front leg (forward, contrapposto) -->
+      <path d="M -22,-36 L -8,-36 L -6,6 L -22,6 Z" fill="#b07840"/>
+      <path d="M -22,-36 L -16,-36 L -16,6 L -22,6 Z" fill="#a06830" opacity="0.6"/>
+
+      <!-- shendyt kilt -->
+      <path d="M -26,-92 L 24,-92 L 32,-36 L -30,-36 Z" fill="#f0e0a0"/>
+      <!-- kilt pleats -->
+      <g stroke="#c8a868" stroke-width="1.5">
+        <path d="M -18,-88 L -20,-38"/>
+        <path d="M -8,-90 L -10,-38"/>
+        <path d="M 2,-92 L 2,-38"/>
+        <path d="M 12,-90 L 14,-38"/>
+        <path d="M 22,-88 L 24,-38"/>
+      </g>
+      <!-- gold belt -->
+      <rect x="-26" y="-98" width="50" height="9" fill="#c89b3c"/>
+      <rect x="-26" y="-89" width="50" height="2" fill="#6b3410"/>
+      <!-- cartouche buckle -->
+      <rect x="-8" y="-103" width="16" height="16" fill="#f4d050" stroke="#6b3410" stroke-width="1"/>
+      <path d="M -4,-99 L 4,-99 M -4,-95 L 4,-95 M -4,-91 L 0,-91" stroke="#6b3410" stroke-width="0.8"/>
+
+      <!-- torso (muscular V) -->
+      <path d="M -32,-168 L 30,-168 L 24,-98 L -26,-98 Z" fill="#c08850"/>
+      <!-- torso shading on left side -->
+      <path d="M -32,-168 L -12,-168 L -16,-98 L -26,-98 Z" fill="#a87038" opacity="0.4"/>
+      <!-- pectoral line -->
+      <path d="M -22,-144 Q 0,-132 20,-144" stroke="#8a5828" stroke-width="2" fill="none" opacity="0.5"/>
+      <!-- ab line -->
+      <path d="M -2,-132 L 0,-100" stroke="#8a5828" stroke-width="1.2" opacity="0.45"/>
+
+      <!-- usekh (broad collar) -->
+      <ellipse cx="0" cy="-165" rx="36" ry="15" fill="#f4d050"/>
+      <ellipse cx="0" cy="-165" rx="36" ry="15" fill="none" stroke="#6b3410" stroke-width="1.5"/>
+      <ellipse cx="0" cy="-161" rx="32" ry="9"  fill="#3060a0"/>
+      <ellipse cx="0" cy="-158" rx="27" ry="6"  fill="#c89b3c"/>
+      <ellipse cx="0" cy="-156" rx="22" ry="3.5" fill="#7a3818"/>
+
+      <!-- back arm (whip-side), raised high behind head -->
+      <path d="M -6,-162 Q -36,-200 -30,-232 Q -22,-252 -4,-256"
+            stroke="#c08850" stroke-width="14" fill="none" stroke-linecap="round"/>
+      <!-- shoulder cap -->
+      <ellipse cx="-22" cy="-168" rx="11" ry="9" fill="#c08850"/>
+
+      <!-- front arm (forward, commanding) -->
+      <path d="M 28,-156 Q 70,-148 110,-128 Q 130,-118 148,-110"
+            stroke="#c08850" stroke-width="14" fill="none" stroke-linecap="round"/>
+      <!-- pointing hand -->
+      <path d="M 148,-110 L 168,-104 L 148,-100 Z" fill="#c08850"/>
+      <ellipse cx="28" cy="-160" rx="10" ry="9" fill="#c08850"/>
+
+      <!-- head (profile facing LEFT, toward slaves) -->
+      <g transform="translate(-14,-198)">
+        <!-- face -->
+        <path d="M 0,-2 Q -2,-14 -14,-18 Q -22,-16 -26,-8 Q -28,4 -22,12 L -14,16 Q -8,18 -4,14 Q 2,8 2,0 Q 1,-1 0,-2 Z" fill="#c08850"/>
+        <!-- nose bridge -->
+        <path d="M -26,-6 L -30,-4 L -27,-1 Z" fill="#c08850"/>
+        <!-- lips -->
+        <path d="M -25,4 L -19,6 L -22,9 Z" fill="#7a2e10"/>
+        <path d="M -22,9 L -16,10 L -19,12 Z" fill="#5a1e08"/>
+        <!-- eye (Egyptian style: front-on on profile) -->
+        <ellipse cx="-12" cy="-5" rx="5" ry="3" fill="#fff"/>
+        <circle cx="-11" cy="-5" r="2" fill="#1a0a04"/>
+        <!-- eyeliner extension (kohl) -->
+        <path d="M -17,-7 L -7,-3 L -16,-3 Z" fill="#1a0a04" opacity="0.85"/>
+        <path d="M -5,-3 L 2,-1" stroke="#1a0a04" stroke-width="1.2"/>
+        <!-- brow -->
+        <path d="M -18,-10 L -7,-9" stroke="#1a0a04" stroke-width="1.8"/>
+      </g>
+
+      <!-- nemes headdress (blue+gold striped, falls to shoulders) -->
+      <g transform="translate(-14,-198)">
+        <path d="M -32,-12 Q -34,-26 -16,-32 L 8,-26 L 10,-2 L 6,12 L -22,14 L -32,-12 Z" fill="#3060a0"/>
+        <line x1="-26" y1="-18" x2="-26" y2="12" stroke="#f4d050" stroke-width="3.6"/>
+        <line x1="-18" y1="-26" x2="-18" y2="13" stroke="#f4d050" stroke-width="3.6"/>
+        <line x1="-10" y1="-30" x2="-10" y2="13" stroke="#f4d050" stroke-width="3.6"/>
+        <line x1="-2"  y1="-26" x2="-2"  y2="11" stroke="#f4d050" stroke-width="3.6"/>
+        <line x1="6"   y1="-18" x2="6"   y2="8"  stroke="#f4d050" stroke-width="3.6"/>
+        <!-- nemes outline -->
+        <path d="M -32,-12 Q -34,-26 -16,-32 L 8,-26 L 10,-2 L 6,12 L -22,14 L -32,-12 Z"
+              fill="none" stroke="#1a3868" stroke-width="1.5"/>
+        <!-- uraeus cobra on forehead -->
+        <ellipse cx="-26" cy="-24" rx="4.5" ry="6" fill="#f4d050"/>
+        <ellipse cx="-26" cy="-24" rx="4.5" ry="6" fill="none" stroke="#6b3410" stroke-width="0.8"/>
+        <path d="M -26,-28 Q -32,-34 -26,-38 Q -20,-34 -22,-28" stroke="#c89b3c" stroke-width="2.2" fill="#f4d050"/>
+        <circle cx="-26" cy="-34" r="1.4" fill="#1a0a04"/>
+      </g>
+
+      <!-- false beard -->
+      <path d="M -38,-186 L -40,-168 L -34,-166 L -32,-184 Z" fill="#1a0a04"/>
+
+      <!-- whip handle (in raised back hand) -->
+      <rect x="-10" y="-272" width="10" height="22" fill="#f4d050" stroke="#6b3410" stroke-width="1.2"/>
+      <rect x="-10" y="-260" width="10" height="4" fill="#8a5828"/>
+      <!-- whip lash curling up and out over the slaves -->
+      <path d="M -3,-272 Q -52,-310 -10,-345 Q 70,-365 170,-330 Q 240,-310 280,-280"
+            stroke="#3a2010" stroke-width="7" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+      <path d="M -3,-272 Q -52,-310 -10,-345 Q 70,-365 170,-330 Q 240,-310 280,-280"
+            stroke="#7a4828" stroke-width="3.5" fill="none" stroke-linecap="round" stroke-linejoin="round"/>
+
+      <!-- crack burst at whip tip -->
+      <g transform="translate(280,-280)">
+        <path d="M 0,-22 L 6,-6 L 22,0 L 6,6 L 0,22 L -6,6 L -22,0 L -6,-6 Z" fill="#fff4b8"/>
+        <circle r="8" fill="#ffff88"/>
+        <!-- streak lines -->
+        <path d="M 22,-10 L 40,-15" stroke="#fff4b8" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M 24,5 L 42,9"     stroke="#fff4b8" stroke-width="2.5" stroke-linecap="round"/>
+        <path d="M 18,16 L 32,28"   stroke="#fff4b8" stroke-width="2.5" stroke-linecap="round"/>
+      </g>
+    </g>
+
+    <!-- bottom hieroglyph border -->
+    <rect x="0" y="500" width="800" height="20" fill="#1a0a04"/>
+    <text x="400" y="516" text-anchor="middle"
+          font-family="'Noto Sans Egyptian Hieroglyphs','Segoe UI Historic',serif"
+          font-size="16" fill="#c89b3c" letter-spacing="6">
+      𓀀 𓋹 𓏏 𓂀 𓆣 𓊨 𓅓 𓊪 𓏏 𓀀 𓋹 𓏏 𓂀
+    </text>
+  </svg>
+
+  <h1>PHARAOH'S PYRAMID</h1>
+  <div class="sub">This game needs a keyboard</div>
+  <p>The Pharaoh's whip strikes hardest on a desktop. Open this page on a computer with a keyboard to crack the whip and build your pyramid.</p>
+  <div class="glyph-strip">𓂀 𓋹 𓏏 𓊪 𓀀</div>
+</div>
+
 <script>
 (() => {
+  // Don't even boot the game on touch-primary devices — the landing screen is shown instead.
+  if (document.documentElement.classList.contains('no-game')) return;
+
   const canvas = document.getElementById('game');
   const ctx = canvas.getContext('2d');
   const W = canvas.width, H = canvas.height;
@@ -356,6 +552,7 @@
   const timeLabel = document.getElementById('timeLabel');
   const workersEl = document.getElementById('workers');
   const scoreEl = document.getElementById('score');
+  const skipHintEl = document.getElementById('skipHint');
 
   const TOTAL_WORKERS = 12;
   const DAY_LENGTH = 60 * 60; // 60 seconds at 60fps
@@ -510,6 +707,606 @@
     }
   }
 
+  // ---------- End-intro / outro ("victory") ----------
+  // Cinematisk sekvens: Farao står triumferande på pyramidens topp med blodig piska.
+  // Varje beat: { name, duration } där duration = frames @ 60fps.
+  // Justera bara värden här när vi vill omforma timingen.
+  const END_BEATS = [
+    { name: 'approach', duration: 210 },  // 3.5s  kamera närmar sig pyramiden, skymning
+    { name: 'summit',   duration: 180 },  // 3.0s  Farao avslöjas på toppen, mot solen
+    { name: 'raise',    duration: 180 },  // 3.0s  höjer den blodiga piskan
+    { name: 'crack',    duration: 90  },  // 1.5s  pisksmäll med ljusburst
+    { name: 'title',    duration: 240 },  // 4.0s  triumf-pose, titel
+    { name: 'finale',   duration: 90  },  // 1.5s  fade-to-black
+  ];
+  const endIntro = {
+    active: false,
+    beat: 0,
+    beatTimer: 0,
+    totalTimer: 0,
+  };
+  function easeOutQuad(t) { return 1 - (1 - t) * (1 - t); }
+  function easeInQuad(t)  { return t * t; }
+  function easeInOut(t)   { return t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2; }
+  function inEndIntro()   { return endIntro.active; }
+
+  function startEndIntro(opts) {
+    if (endIntro.active) return;
+    opts = opts || {};
+    state.won = true;
+    state.running = false;  // världen behöver inte uppdateras — introt ritar sin egen scen
+    if (opts.fromDebug) {
+      overlay.classList.add('hidden');
+      // Music behövs för full upplevelse — starta om kön
+      buildMusicQueue();
+      startMusic();
+    }
+    endIntro.active = true;
+    endIntro.beat = 0;
+    endIntro.beatTimer = 0;
+    endIntro.totalTimer = 0;
+    document.body.classList.add('intro');
+    skipHintEl.classList.remove('hidden');
+  }
+
+  function endEndIntro() {
+    if (!endIntro.active) return;
+    endIntro.active = false;
+    document.body.classList.remove('intro');
+    skipHintEl.classList.add('hidden');
+    state.running = false;
+    showWin();
+  }
+
+  function skipEndIntro() {
+    if (!endIntro.active) return;
+    // Hindra att samma klick som startade introt direkt skippar det.
+    if (endIntro.totalTimer < 30) return;
+    endEndIntro();
+  }
+
+  function updateEndIntro() {
+    if (!endIntro.active) return;
+    endIntro.beatTimer++;
+    endIntro.totalTimer++;
+    const b = END_BEATS[endIntro.beat];
+    if (endIntro.beatTimer >= b.duration) {
+      endIntro.beat++;
+      endIntro.beatTimer = 0;
+      if (endIntro.beat >= END_BEATS.length) endEndIntro();
+    }
+  }
+
+  function currentEndBeat() {
+    if (!endIntro.active) return null;
+    const b = END_BEATS[endIntro.beat];
+    return { name: b.name, t: endIntro.beatTimer / b.duration };
+  }
+
+  // Hur högt piskan är höjd över huvudet, per beat och progression t.
+  // 0 = vid sidan/nedhängande, 1 = rakt över huvudet bakåt (triumf-pose).
+  function whipRaiseForBeat(name, t) {
+    if (name === 'summit')   return 0.05 + t * 0.05;
+    if (name === 'raise')    return 0.10 + easeInOut(t) * 0.90;
+    if (name === 'crack')    return 1.00 - t * 0.15;  // snärtar fram lätt
+    if (name === 'title')    return 0.92 + Math.sin(endIntro.totalTimer * 0.08) * 0.03;
+    if (name === 'finale')   return 0.92;
+    return 0;
+  }
+
+  // Kameraparametrar för en given beat (scale + översätt-offset från canvas-mitt).
+  function cameraForBeat(name, t) {
+    if (name === 'approach') {
+      // Långsam zoom-in mot pyramidens topp under hela approach-beaten
+      const e = easeInOut(t);
+      return { scale: 0.94 + e * 0.11, offX: 0, offY: 0 };
+    }
+    if (name === 'summit')  return { scale: 1.05 + easeOutQuad(t) * 0.02, offX: 0, offY: 0 };
+    if (name === 'raise')   return { scale: 1.07 + easeInOut(t) * 0.05, offX: 0, offY: 0 };
+    if (name === 'crack')   return { scale: 1.12, offX: 0, offY: 0 };
+    if (name === 'title')   return { scale: 1.12, offX: 0, offY: 0 };
+    if (name === 'finale')  return { scale: 1.12, offX: 0, offY: 0 };
+    return { scale: 1, offX: 0, offY: 0 };
+  }
+
+  function drawCinematicSky(intensity) {
+    // Djup röd-/guldgradient — soluppgång/skymning över öknen
+    const grad = ctx.createLinearGradient(0, 0, 0, H);
+    grad.addColorStop(0,    '#160606');
+    grad.addColorStop(0.18, '#3a1408');
+    grad.addColorStop(0.45, '#7a2810');
+    grad.addColorStop(0.72, '#d87830');
+    grad.addColorStop(0.92, '#f4c050');
+    grad.addColorStop(1,    '#7a3818');
+    ctx.fillStyle = grad;
+    ctx.fillRect(0, 0, W, H);
+    // Lätt sandstoft i luften
+    ctx.globalAlpha = 0.10 * intensity;
+    ctx.fillStyle = '#d88040';
+    for (let i = 0; i < 60; i++) {
+      const sx = (i * 137 + endIntro.totalTimer * 0.3) % W;
+      const sy = (i * 211) % (H * 0.7);
+      ctx.fillRect(sx, sy, 2, 2);
+    }
+    ctx.globalAlpha = 1;
+  }
+
+  function drawCinematicSun(cx, cy, r, pulse, rayBoost) {
+    // Mjukt yttre halo
+    const halo = ctx.createRadialGradient(cx, cy, r * 0.4, cx, cy, r * 4);
+    halo.addColorStop(0,    'rgba(255,220,140,0.7)');
+    halo.addColorStop(0.25, 'rgba(255,180,100,0.35)');
+    halo.addColorStop(1,    'rgba(255,180,100,0)');
+    ctx.fillStyle = halo;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * 4, 0, Math.PI*2);
+    ctx.fill();
+    // Solskiva
+    const disc = ctx.createRadialGradient(cx - r*0.2, cy - r*0.2, 0, cx, cy, r * (1 + pulse * 0.06));
+    disc.addColorStop(0,    '#fff8c8');
+    disc.addColorStop(0.55, '#ffd880');
+    disc.addColorStop(1,    '#ff9038');
+    ctx.fillStyle = disc;
+    ctx.beginPath();
+    ctx.arc(cx, cy, r * (1 + pulse * 0.06), 0, Math.PI*2);
+    ctx.fill();
+    // Gudsstrålar — radiella ljusband
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const rayCount = 14;
+    const rotPhase = endIntro.totalTimer * 0.003;
+    for (let i = 0; i < rayCount; i++) {
+      const a = (i / rayCount) * Math.PI*2 + rotPhase;
+      const len = 800;
+      const grad = ctx.createLinearGradient(cx, cy, cx + Math.cos(a)*len, cy + Math.sin(a)*len);
+      grad.addColorStop(0, `rgba(255,235,170,${0.18 * rayBoost})`);
+      grad.addColorStop(1, 'rgba(255,200,120,0)');
+      ctx.strokeStyle = grad;
+      ctx.lineWidth = 40;
+      ctx.lineCap = 'round';
+      ctx.beginPath();
+      ctx.moveTo(cx, cy);
+      ctx.lineTo(cx + Math.cos(a)*len, cy + Math.sin(a)*len);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  function drawCinematicPyramid(cx, baseY, halfWidth, height) {
+    // Silhuett-pyramid med upplyst (sol-)kant höger
+    const grad = ctx.createLinearGradient(cx - halfWidth, baseY - height, cx + halfWidth, baseY);
+    grad.addColorStop(0, '#1a0a04');
+    grad.addColorStop(0.5, '#2a1208');
+    grad.addColorStop(1, '#0a0402');
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.moveTo(cx - halfWidth, baseY);
+    ctx.lineTo(cx, baseY - height);
+    ctx.lineTo(cx + halfWidth, baseY);
+    ctx.closePath();
+    ctx.fill();
+    // Sol-belyst högerkant
+    ctx.strokeStyle = '#ffc870';
+    ctx.lineWidth = 3.5;
+    ctx.beginPath();
+    ctx.moveTo(cx, baseY - height);
+    ctx.lineTo(cx + halfWidth, baseY);
+    ctx.stroke();
+    // Tunnare glow ovanpå solkanten
+    ctx.strokeStyle = 'rgba(255,240,170,0.6)';
+    ctx.lineWidth = 1.5;
+    ctx.stroke();
+    // Subtila stenkurser
+    ctx.strokeStyle = 'rgba(40,20,10,0.55)';
+    ctx.lineWidth = 1;
+    for (let r = 1; r < 12; r++) {
+      const y = baseY - (r/12) * height;
+      const wHalf = (1 - r/12) * halfWidth;
+      ctx.beginPath();
+      ctx.moveTo(cx - wHalf, y);
+      ctx.lineTo(cx + wHalf, y);
+      ctx.stroke();
+    }
+  }
+
+  function drawCinematicDunes(baseY) {
+    ctx.fillStyle = '#1a0a04';
+    ctx.beginPath();
+    ctx.moveTo(0, baseY);
+    ctx.quadraticCurveTo(W*0.25, baseY - 28, W*0.5, baseY - 8);
+    ctx.quadraticCurveTo(W*0.75, baseY + 6, W, baseY - 18);
+    ctx.lineTo(W, H);
+    ctx.lineTo(0, H);
+    ctx.closePath();
+    ctx.fill();
+    // Sol-belyst topplinje
+    ctx.strokeStyle = 'rgba(255,200,120,0.5)';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(0, baseY);
+    ctx.quadraticCurveTo(W*0.25, baseY - 28, W*0.5, baseY - 8);
+    ctx.quadraticCurveTo(W*0.75, baseY + 6, W, baseY - 18);
+    ctx.stroke();
+  }
+
+  // Detaljerad Farao, profil mot vänster, mörk silhuett med guld-kant
+  // raise: 0..1 (piska vid sidan → överhuvud); bloodAmount: 0..1
+  function drawCinematicPharaoh(cx, feetY, scale, raise, bloodAmount, opacity) {
+    ctx.save();
+    ctx.translate(cx, feetY);
+    ctx.scale(scale, scale);
+    ctx.globalAlpha = opacity;
+
+    const SILH = '#0a0408';
+    const EDGE = '#ffd880';
+
+    // Vinkel på piske-armen: raise=0 hand vid höft, raise=1 hand över huvud
+    // Piskan pekar bakåt-uppåt vid full raise — som en triumf-pose.
+    const armAngle = -Math.PI*0.5 + (1 - raise) * (Math.PI*0.55);  // -0.5π .. (-0.5π + 0.55π) = 0.05π
+    // Hand-position relativt skuldra (axel vid (12, -125))
+    const SHX = 12, SHY = -125;
+    const ARM_LEN = 56;
+    const handX = SHX + Math.cos(armAngle) * ARM_LEN;
+    const handY = SHY + Math.sin(armAngle) * ARM_LEN;
+    // Piskans lash-riktning: ungefär samma vinkel, men droppar lite
+    const lashAngle = armAngle + 0.7;  // släpar bakom rörelsen
+
+    // ======== KROPP (silhuett) ========
+    ctx.fillStyle = SILH;
+
+    // Bakre ben (planterat)
+    ctx.beginPath();
+    ctx.moveTo(2, -48); ctx.lineTo(11, -48); ctx.lineTo(13, 2); ctx.lineTo(0, 2);
+    ctx.closePath(); ctx.fill();
+
+    // Främre ben (något framåt)
+    ctx.beginPath();
+    ctx.moveTo(-13, -32); ctx.lineTo(-5, -32); ctx.lineTo(-3, 2); ctx.lineTo(-15, 2);
+    ctx.closePath(); ctx.fill();
+
+    // Sandaler
+    ctx.fillRect(-15, 2, 14, 3);
+    ctx.fillRect(0, 2, 14, 3);
+
+    // Shendyt kilt
+    ctx.beginPath();
+    ctx.moveTo(-20, -78);
+    ctx.lineTo(18, -78);
+    ctx.lineTo(24, -32);
+    ctx.lineTo(-22, -32);
+    ctx.closePath();
+    ctx.fill();
+
+    // Bälte
+    ctx.fillRect(-20, -82, 38, 6);
+    // Cartouche-spänne
+    ctx.fillRect(-5, -86, 10, 9);
+
+    // Torso (V-form, breda axlar)
+    ctx.beginPath();
+    ctx.moveTo(-26, -135);
+    ctx.lineTo(28, -135);
+    ctx.lineTo(20, -78);
+    ctx.lineTo(-20, -78);
+    ctx.closePath();
+    ctx.fill();
+
+    // Bredkrage (usekh) — silhuett av den karakteristiska formen
+    ctx.beginPath();
+    ctx.ellipse(0, -130, 24, 9, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Främre arm (slappt nedåt, knytnäve)
+    ctx.lineWidth = 11;
+    ctx.lineCap = 'round';
+    ctx.strokeStyle = SILH;
+    ctx.beginPath();
+    ctx.moveTo(-18, -130);
+    ctx.lineTo(-26, -100);
+    ctx.lineTo(-30, -70);
+    ctx.stroke();
+    // näve
+    ctx.beginPath();
+    ctx.arc(-30, -66, 6, 0, Math.PI*2);
+    ctx.fill();
+    // Främre axel
+    ctx.beginPath(); ctx.arc(-22, -132, 8, 0, Math.PI*2); ctx.fill();
+
+    // Bakre arm (med piska) — uppåt-bakåt
+    ctx.lineWidth = 12;
+    ctx.beginPath();
+    ctx.moveTo(SHX, SHY);
+    // armbåge halvvägs
+    const elbowX = SHX + Math.cos(armAngle - 0.15) * ARM_LEN * 0.55;
+    const elbowY = SHY + Math.sin(armAngle - 0.15) * ARM_LEN * 0.55;
+    ctx.lineTo(elbowX, elbowY);
+    ctx.lineTo(handX, handY);
+    ctx.stroke();
+    // Bakre axel
+    ctx.beginPath(); ctx.arc(SHX, SHY, 9, 0, Math.PI*2); ctx.fill();
+
+    // ======== HUVUD MED NEMES (profil vänster) ========
+    // Nemes — den karakteristiska blå-/guldstribiga huvudbonaden
+    // Form: trapets med "vingar" som faller över axlarna
+    ctx.fillStyle = SILH;
+    ctx.beginPath();
+    ctx.moveTo(-10, -135);
+    ctx.lineTo(-10, -150);
+    ctx.quadraticCurveTo(-10, -176, -28, -184);  // bakre topp
+    ctx.lineTo(-44, -180);                        // ansikte-framsida (lillpanna)
+    ctx.lineTo(-46, -160);                        // pann/näsa
+    ctx.lineTo(-42, -148);                        // näsa
+    ctx.lineTo(-40, -140);                        // läpp
+    ctx.lineTo(-34, -135);                        // haka
+    ctx.lineTo(-30, -132);                        // skäggets baksida
+    ctx.lineTo(-25, -132);
+    ctx.lineTo(-25, -138);
+    ctx.lineTo(8, -138);                          // baksida nemes ner till axel
+    ctx.lineTo(10, -135);
+    ctx.closePath();
+    ctx.fill();
+
+    // Ceremoniellt falskt skägg (rakt och fyrkantigt)
+    ctx.fillRect(-36, -148, 4, 14);
+
+    // ======== GULD-KANT (rim-light från sol bakom) ========
+    ctx.globalAlpha = opacity * 0.95;
+    ctx.strokeStyle = EDGE;
+    ctx.lineWidth = 2.2;
+    // Höger sida av kroppen (där solen lyser bakifrån) + topp av huvud
+    ctx.beginPath();
+    // höger torso/skuldra
+    ctx.moveTo(28, -135);
+    ctx.lineTo(20, -78);
+    // höger sida kilt
+    ctx.lineTo(24, -32);
+    // bakre benets framkant
+    ctx.moveTo(11, -48);
+    ctx.lineTo(13, 2);
+    // ovansidan av kragen — bara höger halva
+    ctx.moveTo(-8, -138);
+    ctx.quadraticCurveTo(14, -142, 22, -132);
+    // bakre arm — yttre kant
+    ctx.moveTo(SHX + 4, SHY - 2);
+    ctx.lineTo(elbowX + 3, elbowY - 1);
+    ctx.lineTo(handX + 1, handY - 1);
+    // ovansidan av nemes (sol-belyst)
+    ctx.moveTo(-10, -150);
+    ctx.quadraticCurveTo(-12, -178, -28, -184);
+    ctx.stroke();
+
+    // Liten ljusprick i ögat (sol-reflex)
+    ctx.globalAlpha = opacity;
+    ctx.fillStyle = EDGE;
+    ctx.beginPath();
+    ctx.arc(-38, -163, 1.6, 0, Math.PI*2);
+    ctx.fill();
+
+    // Guld-detaljer: bältesranden + kragens överkant + cartouche-glimt
+    ctx.fillStyle = '#c89b3c';
+    ctx.fillRect(-20, -82, 38, 2);            // bältets över-edge
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(-5, -86, 10, 1.5);           // cartouche topp
+    // Liten guld-uraeus på pannan
+    ctx.beginPath();
+    ctx.arc(-43, -178, 2.5, 0, Math.PI*2);
+    ctx.fill();
+
+    // ======== PISKA ========
+    // Handtag i hand
+    ctx.save();
+    ctx.translate(handX, handY);
+    ctx.rotate(armAngle);
+    ctx.fillStyle = '#c89b3c';
+    ctx.fillRect(-3, -2, 18, 5);
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(-3, -2, 4, 5);
+    ctx.restore();
+
+    // Piskans lash — kurvar utåt med viss tröghet
+    // Slutpunkt baseras på lashAngle och en längd
+    const LASH_LEN = 85;
+    const lashEndX = handX + Math.cos(lashAngle) * LASH_LEN;
+    const lashEndY = handY + Math.sin(lashAngle) * LASH_LEN;
+    // Mid-kontrollpunkt med viss sag/sway
+    const lashMidX = handX + Math.cos(lashAngle - 0.4) * LASH_LEN * 0.55;
+    const lashMidY = handY + Math.sin(lashAngle - 0.4) * LASH_LEN * 0.55 + 8;
+
+    // Mörk bas-lash
+    ctx.strokeStyle = SILH;
+    ctx.lineWidth = 6;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(handX + Math.cos(armAngle)*8, handY + Math.sin(armAngle)*8);
+    ctx.quadraticCurveTo(lashMidX, lashMidY, lashEndX, lashEndY);
+    ctx.stroke();
+
+    // Blod på piskan (täcker den mörka basen i blodrött)
+    if (bloodAmount > 0) {
+      ctx.strokeStyle = `rgba(180,15,15,${0.9 * bloodAmount})`;
+      ctx.lineWidth = 5;
+      ctx.beginPath();
+      ctx.moveTo(handX + Math.cos(armAngle)*8, handY + Math.sin(armAngle)*8);
+      ctx.quadraticCurveTo(lashMidX, lashMidY, lashEndX, lashEndY);
+      ctx.stroke();
+      // Mörkare blod på toppen
+      ctx.strokeStyle = `rgba(100,5,5,${0.7 * bloodAmount})`;
+      ctx.lineWidth = 2.5;
+      ctx.stroke();
+      // Blod-droppar som faller från piskans tip
+      for (let i = 0; i < 4; i++) {
+        const cycle = (endIntro.totalTimer * 0.7 + i * 18) % 100;
+        if (cycle > 60) continue;
+        const dt = cycle / 60;
+        const dropY = lashEndY + dt * 60;
+        const dropX = lashEndX + (i - 1.5) * 4 + Math.sin(dt * 3) * 2;
+        const dropA = bloodAmount * (1 - dt);
+        ctx.fillStyle = `rgba(170,12,12,${dropA})`;
+        ctx.beginPath();
+        ctx.arc(dropX, dropY, 2.2 + (1 - dt) * 1.5, 0, Math.PI*2);
+        ctx.fill();
+      }
+    }
+
+    // Guld-glimt på piskans tipp (sol-reflex)
+    ctx.fillStyle = EDGE;
+    ctx.globalAlpha = opacity * 0.8;
+    ctx.beginPath();
+    ctx.arc(lashEndX, lashEndY, 2.5, 0, Math.PI*2);
+    ctx.fill();
+    ctx.globalAlpha = opacity;
+
+    ctx.restore();
+  }
+
+  function drawCrackFlash(cx, cy, t) {
+    // En snabb ljusburst när piskan smäller
+    const burstR = 60 + t * 360;
+    const alpha = Math.max(0, 1 - t);
+    ctx.save();
+    ctx.globalCompositeOperation = 'lighter';
+    const grad = ctx.createRadialGradient(cx, cy, 0, cx, cy, burstR);
+    grad.addColorStop(0,   `rgba(255,255,220,${alpha * 0.9})`);
+    grad.addColorStop(0.4, `rgba(255,200,120,${alpha * 0.4})`);
+    grad.addColorStop(1,   `rgba(255,200,120,0)`);
+    ctx.fillStyle = grad;
+    ctx.beginPath();
+    ctx.arc(cx, cy, burstR, 0, Math.PI*2);
+    ctx.fill();
+    // Cross-spike
+    ctx.fillStyle = `rgba(255,250,200,${alpha})`;
+    ctx.fillRect(cx - burstR*0.9, cy - 2, burstR*1.8, 4);
+    ctx.fillRect(cx - 2, cy - burstR*0.9, 4, burstR*1.8);
+    ctx.restore();
+    // Vit blixt över hela canvasen (kort)
+    if (t < 0.2) {
+      ctx.fillStyle = `rgba(255,250,200,${(1 - t*5) * 0.7})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  function drawCinematic() {
+    const beat = currentEndBeat();
+    if (!beat) return;
+    const { name, t } = beat;
+
+    // Pyramidens kompositionscentrum i den cinematiska scenen.
+    // Toppen ligger så lågt att Farao + höjd piska får plats ovanför.
+    const PYR_CX = W * 0.62;
+    const PYR_BASE_Y = H * 0.94;
+    const PYR_HALF = 310;
+    const PYR_HEIGHT = 320;
+    const PYR_TIP_Y = PYR_BASE_Y - PYR_HEIGHT;
+    // Solen — bakom pyramidens topp, något åt höger
+    const SUN_CX = PYR_CX + 35;
+    const SUN_CY = PYR_TIP_Y - 24;
+    const SUN_R  = 80;
+    // Farao står ovanpå topp-stenen
+    const PH_CX = PYR_CX;
+    const PH_FEET_Y = PYR_TIP_Y + 2;
+    const PH_SCALE  = 1.20;
+
+    // Bas: helsvart bakgrund
+    ctx.fillStyle = '#000';
+    ctx.fillRect(0, 0, W, H);
+
+    // Kamera-transform
+    const cam = cameraForBeat(name, t);
+    let shakeX = 0, shakeY = 0;
+    if (name === 'crack') {
+      const ct = endIntro.beatTimer;
+      const decay = Math.max(0, 1 - ct / 30);
+      shakeX = (Math.sin(ct * 1.7) + Math.sin(ct * 3.1)) * 14 * decay;
+      shakeY = (Math.cos(ct * 2.3) + Math.sin(ct * 4.1)) * 14 * decay;
+    }
+    ctx.save();
+    ctx.translate(W/2 + shakeX, H/2 + shakeY);
+    ctx.scale(cam.scale, cam.scale);
+    ctx.translate(-W/2 + cam.offX, -H/2 + cam.offY);
+
+    // Himmel och atmosfär
+    drawCinematicSky(1);
+
+    // Sol med strålar
+    const sunPulse = (name === 'raise' ? easeInOut(t) : (name === 'crack' || name === 'title' || name === 'finale') ? 1 : 0.4);
+    const rayBoost = (name === 'approach' ? 0.35 + t * 0.35
+                    : name === 'summit'   ? 0.7
+                    : name === 'raise'    ? 0.7 + t * 0.4
+                    : name === 'crack'    ? 1.6
+                    : 1.1);
+    drawCinematicSun(SUN_CX, SUN_CY, SUN_R, sunPulse, rayBoost);
+
+    // Pyramid + dyner
+    drawCinematicPyramid(PYR_CX, PYR_BASE_Y, PYR_HALF, PYR_HEIGHT);
+    drawCinematicDunes(PYR_BASE_Y - 30);
+
+    // Farao — tonar in tidigt i 'approach' så han syns nästan från start
+    let pharaohOpacity = 1;
+    if (name === 'approach') pharaohOpacity = Math.max(0, Math.min(1, (t - 0.15) / 0.35));
+    const raise = whipRaiseForBeat(name, t);
+    if (pharaohOpacity > 0) {
+      drawCinematicPharaoh(PH_CX, PH_FEET_Y, PH_SCALE, raise, 1.0, pharaohOpacity);
+    }
+
+    // Pisksmäll-effekt
+    if (name === 'crack') {
+      // Smällen sker i den övre delen av kameraframen, ungefär där piskans tipp är
+      const flashX = PH_CX + 70;
+      const flashY = PH_FEET_Y - 195;
+      drawCrackFlash(flashX, flashY, t);
+    }
+
+    ctx.restore();
+
+    // ======== UI-lager (utanför kamera-transform) ========
+
+    // Approach: snabb fade-in från svart (~0.5s, sen ser man scenen)
+    if (name === 'approach') {
+      const a = Math.max(0, 1 - t * 7);
+      if (a > 0) {
+        ctx.fillStyle = `rgba(0,0,0,${a})`;
+        ctx.fillRect(0, 0, W, H);
+      }
+    }
+
+    // Title — stor lysande titel
+    if (name === 'title' || (name === 'finale' && t < 0.6)) {
+      const localT = name === 'title' ? t : 1;
+      const titleA = Math.min(1, localT * 2.4);
+      ctx.save();
+      ctx.globalAlpha = titleA;
+      ctx.textAlign = 'center';
+      ctx.textBaseline = 'middle';
+      // Subtle dark underlay so text reads against the bright sky
+      const ty = H * 0.78;
+      ctx.fillStyle = 'rgba(0,0,0,0.45)';
+      ctx.fillRect(0, ty - 70, W, 140);
+      // Huvudtitel
+      ctx.font = 'bold 92px Georgia';
+      ctx.fillStyle = '#fff088';
+      ctx.shadowColor = 'rgba(0,0,0,0.85)';
+      ctx.shadowBlur = 22;
+      ctx.shadowOffsetY = 6;
+      ctx.fillText('VICTORY', W/2, ty);
+      // Gold trim — rita igen ovanpå utan shadow för crispness
+      ctx.shadowBlur = 0;
+      ctx.shadowOffsetY = 0;
+      ctx.fillStyle = '#f8d870';
+      ctx.fillText('VICTORY', W/2, ty);
+      // Undertext: hieroglyfer
+      ctx.font = '34px "Noto Sans Egyptian Hieroglyphs", "Segoe UI Historic", serif';
+      ctx.fillStyle = '#c89b3c';
+      ctx.fillText('𓋹  𓏏  𓊪  𓀀  𓋹  𓏏  𓊪', W/2, ty + 58);
+      ctx.restore();
+    }
+
+    // Finale: fade till svart
+    if (name === 'finale') {
+      ctx.fillStyle = `rgba(0,0,0,${easeInQuad(t)})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
   // Stjärnor (statiska positioner)
   for (let i = 0; i < 60; i++) {
     state.stars.push({
@@ -536,97 +1333,10 @@
   });
   canvas.addEventListener('mousedown', () => { tryWhip(); });
 
-  // ---------- Touch input ----------
-  const touch = { x: 0, y: 0, active: false };
-  const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
-  if (isTouch) {
-    document.body.classList.add('touch');
-    const hint = document.getElementById('ctrlHint');
-    if (hint) hint.textContent = 'DRAG TO MOVE · TAP TO WHIP';
-  }
-
-  const joyZone = document.getElementById('joyZone');
-  const joyBase = document.getElementById('joyBase');
-  const joyStick = document.getElementById('joyStick');
-  const whipZone = document.getElementById('whipZone');
-  const whipBtn = document.getElementById('whipBtn');
-
-  let joyId = null;
-  let joyOriginX = 0, joyOriginY = 0;
-  const JOY_RADIUS = 55;
-  const JOY_BASE_HALF = 65;
-  const JOY_STICK_HALF = 32;
-
-  function setJoyVisual(originX, originY, stickX, stickY) {
-    const zr = joyZone.getBoundingClientRect();
-    joyBase.style.left = (originX - zr.left - JOY_BASE_HALF) + 'px';
-    joyBase.style.top  = (originY - zr.top  - JOY_BASE_HALF) + 'px';
-    joyStick.style.left = (stickX - zr.left - JOY_STICK_HALF) + 'px';
-    joyStick.style.top  = (stickY - zr.top  - JOY_STICK_HALF) + 'px';
-  }
-
-  function endJoy(changedTouches) {
-    for (const t of changedTouches) {
-      if (t.identifier !== joyId) continue;
-      joyId = null;
-      touch.x = 0; touch.y = 0; touch.active = false;
-      joyZone.classList.remove('active');
-      break;
-    }
-  }
-
-  if (joyZone) {
-    joyZone.addEventListener('touchstart', e => {
-      e.preventDefault();
-      if (joyId !== null) return;
-      const t = e.changedTouches[0];
-      joyId = t.identifier;
-      joyOriginX = t.clientX;
-      joyOriginY = t.clientY;
-      touch.x = 0; touch.y = 0; touch.active = true;
-      joyZone.classList.add('active');
-      setJoyVisual(joyOriginX, joyOriginY, joyOriginX, joyOriginY);
-    }, { passive: false });
-
-    joyZone.addEventListener('touchmove', e => {
-      e.preventDefault();
-      for (const t of e.changedTouches) {
-        if (t.identifier !== joyId) continue;
-        let ddx = t.clientX - joyOriginX;
-        let ddy = t.clientY - joyOriginY;
-        const dist = Math.hypot(ddx, ddy);
-        if (dist > JOY_RADIUS) {
-          ddx = ddx / dist * JOY_RADIUS;
-          ddy = ddy / dist * JOY_RADIUS;
-        }
-        touch.x = ddx / JOY_RADIUS;
-        touch.y = ddy / JOY_RADIUS;
-        setJoyVisual(joyOriginX, joyOriginY, joyOriginX + ddx, joyOriginY + ddy);
-        break;
-      }
-    }, { passive: false });
-
-    joyZone.addEventListener('touchend',    e => { e.preventDefault(); endJoy(e.changedTouches); }, { passive: false });
-    joyZone.addEventListener('touchcancel', e => { e.preventDefault(); endJoy(e.changedTouches); }, { passive: false });
-  }
-
-  function whipTouchPress(e) {
-    e.preventDefault();
-    tryWhip();
-    if (whipBtn) {
-      whipBtn.classList.add('pressed');
-      setTimeout(() => whipBtn.classList.remove('pressed'), 110);
-    }
-  }
-  if (whipZone) whipZone.addEventListener('touchstart', whipTouchPress, { passive: false });
-  if (whipBtn)  whipBtn.addEventListener('touchstart',  whipTouchPress, { passive: false });
-
-  // Block iOS pinch-zoom, double-tap zoom, and long-press context menu
-  document.addEventListener('gesturestart',  e => e.preventDefault());
-  document.addEventListener('gesturechange', e => e.preventDefault());
-  document.addEventListener('gestureend',    e => e.preventDefault());
-  document.addEventListener('contextmenu',   e => e.preventDefault());
-  document.addEventListener('dblclick',      e => e.preventDefault());
+  // Click anywhere skips the end-intro
+  window.addEventListener('click', () => {
+    if (endIntro.active) skipEndIntro();
+  });
 
   // ---------- Pharaoh ----------
   const pharaoh = {
@@ -1006,6 +1716,27 @@
     ry: 40,
   };
 
+  // Skjut ut en punkt ur vattenytan (ellipsen) — radiellt åt närmaste kant.
+  // Returnerar true om punkten faktiskt flyttades.
+  function clampOutOfWaterhole(p, margin = 2) {
+    const rx = WATERHOLE.rx + margin;
+    const ry = WATERHOLE.ry + margin;
+    const ndx = (p.x - WATERHOLE.cx) / rx;
+    const ndy = (p.y - WATERHOLE.cy) / ry;
+    const d2 = ndx*ndx + ndy*ndy;
+    if (d2 >= 1) return false;
+    const d = Math.sqrt(d2);
+    if (d < 1e-4) {
+      // exakt på centrum → tryck uppåt (norra stranden)
+      p.y = WATERHOLE.cy - ry;
+      return true;
+    }
+    const k = 1.0005 / d;
+    p.x = WATERHOLE.cx + ndx * k * rx;
+    p.y = WATERHOLE.cy + ndy * k * ry;
+    return true;
+  }
+
   // ---------- Rest zones (where slackers go to escape work) ----------
   const REST_ZONES = [
     { x: 75,   y: 670, name: 'left',      facing: 1,  onSphinx: false, atWaterhole: false, seated: false },
@@ -1102,6 +1833,7 @@
 
   // ---------- Whip ----------
   function tryWhip() {
+    if (endIntro.active) { skipEndIntro(); return; }
     if (!state.running || state.whipCooldown > 0) return;
     state.whipCooldown = 18;
     pharaoh.whipPhase = 1.0;
@@ -1133,7 +1865,7 @@
           w.restSpot = null;
           w.atRestZone = false;
           w.lazyTarget = null;
-          spawnFloater(w.x, w.y - 30, 'WAKE UP!', '#ffe070');
+          spawnFloater(w.x, w.y - 30, '𓂀 𓋹!', '#ffe070');
           // små "väck-stjärnor" kring huvudet
           for (let i = 0; i < 6; i++) {
             state.cracks.push({
@@ -1154,9 +1886,9 @@
 
         if (wasLazy && !wasSleeping) {
           state.score += 5;
-          spawnFloater(w.x, w.y - 30, '+WORK!', '#ffe070');
+          spawnFloater(w.x, w.y - 30, '𓊪 𓏏!', '#ffe070');
         } else if (!wasLazy) {
-          spawnFloater(w.x, w.y - 30, 'OW!', '#ff8888');
+          spawnFloater(w.x, w.y - 30, '𓀐!', '#ff8888');
         }
 
         // Brutal blod-spray (mycket fler partiklar)
@@ -1216,7 +1948,7 @@
         a.blood = Math.min(5, (a.blood || 0) + 1);
         a.state = 'chased';
         a.stateTimer = 100;
-        spawnFloater(a.x, a.y - 18, '*MJAU!*', '#ff8888');
+        spawnFloater(a.x, a.y - 18, '𓃠!', '#ff8888');
         // blod-spray från katt
         for (let i = 0; i < 8; i++) {
           state.cracks.push({
@@ -1334,27 +2066,26 @@
 
     // Pharaoh movement
     let dx = 0, dy = 0;
-    if (touch.active) {
-      dx = touch.x; dy = touch.y;
-    } else {
+    if (!endIntro.active) {
       if (keys['a'] || keys['arrowleft']) dx -= 1;
       if (keys['d'] || keys['arrowright']) dx += 1;
       if (keys['w'] || keys['arrowup']) dy -= 1;
       if (keys['s'] || keys['arrowdown']) dy += 1;
     }
-    let mag = Math.hypot(dx, dy);
-    if (mag > 1) { dx /= mag; dy /= mag; mag = 1; }
-    if (mag > 0.08) {
-      pharaoh.vx = dx * pharaoh.speed;
-      pharaoh.vy = dy * pharaoh.speed;
-      pharaoh.walkPhase += 0.25 * mag;
-      if (Math.abs(dx) > 0.15) pharaoh.facing = Math.sign(dx);
+    const mag = Math.hypot(dx, dy);
+    if (mag > 0) {
+      pharaoh.vx = (dx/mag) * pharaoh.speed;
+      pharaoh.vy = (dy/mag) * pharaoh.speed;
+      pharaoh.walkPhase += 0.25;
+      if (dx !== 0) pharaoh.facing = Math.sign(dx);
     } else {
       pharaoh.vx *= 0.6; pharaoh.vy *= 0.6;
       pharaoh.walkPhase *= 0.9;
     }
     pharaoh.x = Math.max(40, Math.min(W-40, pharaoh.x + pharaoh.vx));
-    pharaoh.y = Math.max(H*0.55, Math.min(H-30, pharaoh.y + pharaoh.vy));
+    // Begränsa Y så Farao inte kan gå "ovanför" sphinxen (sphinxens fötter ~y=480).
+    pharaoh.y = Math.max(485, Math.min(H-30, pharaoh.y + pharaoh.vy));
+    clampOutOfWaterhole(pharaoh, 4);
 
     const dayPhase = getDayPhase(); // 0=natt 1=dag
     const energyDrain = 0.10 + (1 - dayPhase) * 0.08; // något tröttare nattetid (mildare)
@@ -1416,7 +2147,7 @@
           w.hp = 70;
           w.energy = 50;
           w.scared = 0.4;
-          spawnFloater(w.x, w.y - 30, 'Ugh...', '#ffd0a0');
+          spawnFloater(w.x, w.y - 30, '𓀐...', '#ffd0a0');
         }
         continue;
       }
@@ -1716,10 +2447,9 @@
                 grav: 0.15,
               });
             }
-            if (state.blocksPlaced >= state.blocksTarget) {
-              state.running = false;
+            if (state.blocksPlaced >= state.blocksTarget && !state.won) {
               state.won = true;
-              setTimeout(showWin, 500);
+              setTimeout(() => startEndIntro(), 500);
             }
           }
         }
@@ -1754,6 +2484,13 @@
       if (w.atRestZone && w.restSpot &&
           (w.lazyAction === 'sleeping' || (w.restZone && w.restZone.seated))) {
         w.x = w.restSpot.x; w.y = w.restSpot.y;
+      }
+      // Ingen ska kunna gå/springa över vattenytan — skjut ut radiellt.
+      // Stupade lämnas i fred (kropparna ligger där de landar). Vattenhåls-
+      // sittare exemptas — de sitter precis vid kanten och ska få vara där.
+      const atWaterRest = w.atRestZone && w.restZone && w.restZone.atWaterhole;
+      if (w.state !== 'falling' && w.state !== 'downed' && !atWaterRest) {
+        clampOutOfWaterhole(w, 2);
       }
     }
 
@@ -2054,7 +2791,7 @@
       ctx.fillStyle = f.color;
       ctx.strokeStyle = 'rgba(0,0,0,0.5)';
       ctx.lineWidth = 3;
-      ctx.font = 'bold 16px Georgia';
+      ctx.font = 'bold 18px "Noto Sans Egyptian Hieroglyphs", "Segoe UI Historic", Georgia, serif';
       ctx.textAlign = 'center';
       ctx.strokeText(f.text, f.x, f.y);
       ctx.fillText(f.text, f.x, f.y);
@@ -4504,8 +5241,13 @@
         shouldUpdate = (frameCounter % 2 === 0);
       }
     }
-    if (shouldUpdate) update();
-    draw();
+    if (endIntro.active) {
+      updateEndIntro();
+      drawCinematic();
+    } else {
+      if (shouldUpdate) update();
+      draw();
+    }
     requestAnimationFrame(loop);
   }
 
@@ -4544,6 +5286,15 @@
   }
 
   startBtn.addEventListener('click', startGame);
+
+  const debugIntroBtn = document.getElementById('debugIntroBtn');
+  if (debugIntroBtn) {
+    debugIntroBtn.addEventListener('click', (e) => {
+      // Stoppa klicket från att bubbla upp till window-skip-handlern.
+      e.stopPropagation();
+      startEndIntro({ fromDebug: true });
+    });
+  }
 
   const muteBtn = document.getElementById('muteBtn');
   muteBtn.addEventListener('click', () => {
