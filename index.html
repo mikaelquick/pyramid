@@ -2678,9 +2678,21 @@
     w.lazyTarget = null;
     w.restSpot = pickRestSpot(w.restZone, w);
     w.atRestZone = false;
+    // Om brewery var fullt (returnerade null) — välj annan zon istället
+    if (!w.restSpot && action === 'drinking') {
+      w.lazyAction = 'sleeping';
+      const ok = REST_ZONES.filter(z => !z.atBrewery);
+      w.restZone = ok[Math.floor(Math.random() * ok.length)];
+      w.restSpot = pickRestSpot(w.restZone, w);
+    }
   }
   // Hitta en ledig position vid en zon — undvik att hamna ovanpå andra som vilar där
   function pickRestSpot(zone, w) {
+    // Hjälpare: get-clash-position som funkar för både anlända och gående arbetare
+    function occupiedXY(other) {
+      const useSpot = !other.atRestZone && other.restSpot;
+      return { x: useSpot ? other.restSpot.x : other.x, y: useSpot ? other.restSpot.y : other.y };
+    }
     // Vattenhåls-zonen: sitt på bakre stranden, inte mitt i vattnet
     if (zone.atWaterhole) {
       const sitXSpread = WATERHOLE.rx - 30;
@@ -2692,8 +2704,9 @@
         let clash = false;
         for (const other of workers) {
           if (other === w) continue;
-          if (other.state !== 'lazy' || !other.atRestZone) continue;
-          const d = Math.hypot(other.x - tx, other.y - ty);
+          if (other.state !== 'lazy') continue;
+          const op = occupiedXY(other);
+          const d = Math.hypot(op.x - tx, op.y - ty);
           if (d < 26) { clash = true; break; }
         }
         if (!clash) return { x: tx, y: ty };
@@ -2711,12 +2724,15 @@
         let clash = false;
         for (const other of workers) {
           if (other === w) continue;
-          if (other.state !== 'lazy' || !other.atRestZone) continue;
-          if (Math.hypot(other.x - p.x, other.y - p.y) < 26) { clash = true; break; }
+          if (other.state !== 'lazy') continue;
+          const op = occupiedXY(other);
+          if (Math.hypot(op.x - p.x, op.y - p.y) < 26) { clash = true; break; }
         }
         if (!clash) return p;
       }
-      return positions[0];
+      // Båda platser tagna — gå någon annanstans (returnera null så caller väljer
+      // ny restZone) istället för att stapla på position 0
+      return null;
     }
 
     const spread = zone.onSphinx ? 50 : 70;
@@ -2730,13 +2746,13 @@
       const oy = (Math.random() - 0.5) * vSpread * 2;
       const tx = Math.max(minX, Math.min(maxX, zone.x + ox));
       const ty = Math.max(minY, Math.min(maxY, zone.y + oy));
-      // kolla om någon annan vilo-arbetare står inom 22px
+      // kolla om någon annan vilo-arbetare står inom 22px (eller är på väg dit)
       let clash = false;
       for (const other of workers) {
         if (other === w) continue;
         if (other.state !== 'lazy') continue;
-        if (!other.atRestZone) continue;
-        const d = Math.hypot(other.x - tx, other.y - ty);
+        const op = occupiedXY(other);
+        const d = Math.hypot(op.x - tx, op.y - ty);
         if (d < 22) { clash = true; break; }
       }
       if (!clash) return { x: tx, y: ty };
@@ -6899,7 +6915,10 @@
   function drawPharaoh(p) {
     const x = p.x, y = p.y;
     const f = p.facing;
-    const bob = Math.sin(p.walkPhase)*2;
+    // Idle-andning: när stilla, en lugn sinus så han inte ser ut som en staty
+    const moving = Math.hypot(p.vx || 0, p.vy || 0) > 0.08;
+    const idleBreath = moving ? 0 : Math.sin(state.time * 0.025) * 0.9;
+    const bob = Math.sin(p.walkPhase)*2 + idleBreath;
 
     ctx.fillStyle = 'rgba(0,0,0,0.25)';
     ctx.beginPath();
@@ -7374,44 +7393,49 @@
       const isCrankWorker = !!w.crankTask;
       if (isWorking || hasBoost || isBearer || isLintelWorker || isCrankWorker) {
         let icon = '𓊪';
-        let color = 'rgba(170,200,140,0.55)';
-        let size = 10;
+        let color = '#b8e090';
+        let size = 16;
         const lvl = w.boostLevel || 0;
         if (isBearer) {
           // Ankh — räddar liv (bär en kamrat eller på väg att hämta båren)
           icon = '𓋹';
-          color = 'rgba(180,240,180,0.95)';
-          size = 13;
+          color = '#a0f0a0';
+          size = 17;
         } else if (w.lintelTask) {
           // Stor sten-glyf för lintel-bärare
           icon = '𓊌';
-          color = 'rgba(255,200,80,0.95)';
-          size = 14;
+          color = '#ffd060';
+          size = 18;
         } else if (w.crankTask) {
-          // Vridning/rep-glyph (sicksack-form)
+          // Vridning/rep-glyph
           icon = '𓂁';
-          color = 'rgba(220,180,90,0.95)';
-          size = 12;
+          color = '#e8b860';
+          size = 16;
         } else if (w.woodTask) {
           // Träd-glyf — hämtar/bär ved för scaffolding
           icon = '𓆱';
-          color = 'rgba(180,210,120,0.90)';
-          size = 12;
+          color = '#b8d870';
+          size = 16;
         } else if (w.carrying) {
-          // Stenkluts-glyf — bär en sten
+          // Stenkluts-glyf — bär en sten (samma synlighet som ♥/♪ på slackers)
           icon = '𓊌';
-          color = 'rgba(220,210,180,0.85)';
-          size = 12;
+          color = '#f0e0b0';
+          size = 16;
         }
         // Boost-nivå överstyr när den är aktiv (gäller flitiga slavar med pisk-rapp)
-        if (lvl === 1) { icon = '𓎼'; color = 'rgba(160,210,255,0.90)'; size = 11; }
-        else if (lvl === 2) { icon = '𓎼'; color = 'rgba(255,220,90,1.0)';  size = 13; }
-        else if (lvl === 3) { icon = '𓎼'; color = 'rgba(255,140,90,1.0)';  size = 13; }
-        else if (lvl >= 4) { icon = '𓎼'; color = 'rgba(255,80,80,1.0)';   size = 13; }
+        if (lvl === 1) { icon = '𓎼'; color = '#a0d8ff'; size = 16; }
+        else if (lvl === 2) { icon = '𓎼'; color = '#ffe070'; size = 17; }
+        else if (lvl === 3) { icon = '𓎼'; color = '#ff9060'; size = 18; }
+        else if (lvl >= 4) { icon = '𓎼'; color = '#ff5050'; size = 18; }
+        // Wobble synkad med worker's gång — samma stil som lat-ikoner
+        const wobble = Math.sin(state.time * 0.1 + w.walkPhase) * 3;
         ctx.fillStyle = color;
-        ctx.font = 'bold ' + size + 'px Georgia';
+        ctx.strokeStyle = 'rgba(20,8,4,0.6)';
+        ctx.lineWidth = 2;
+        ctx.font = 'bold ' + size + 'px "Noto Sans Egyptian Hieroglyphs","Segoe UI Historic",Georgia,serif';
         ctx.textAlign = 'center';
-        ctx.fillText(icon, x, y - 30 + bob);
+        ctx.strokeText(icon, x + wobble, y - 32 + bob);
+        ctx.fillText(icon, x + wobble, y - 32 + bob);
       }
     }
 
