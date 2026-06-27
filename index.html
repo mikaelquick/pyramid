@@ -2,6 +2,10 @@
 <html lang="en">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, maximum-scale=1, user-scalable=no, viewport-fit=cover">
+<meta name="mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
 <title>Pharaoh's Pyramid</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
@@ -12,6 +16,8 @@
     font-family: 'Georgia', serif;
     overflow: hidden;
     color: #f4d97a;
+    overscroll-behavior: none;
+    touch-action: none;
   }
   #frame {
     position: relative;
@@ -85,6 +91,10 @@
     width: 100%;
     height: 100%;
     cursor: crosshair;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-touch-callout: none;
   }
   #hud {
     position: absolute;
@@ -168,6 +178,119 @@
   #overlay button:active { transform: translateY(4px); box-shadow: 0 2px 0 #6b3410, 0 4px 12px rgba(0,0,0,0.5); }
   #overlay.hidden { display: none; }
   .hint { font-size: 13px; opacity: 0.55; letter-spacing: 2px; }
+
+  /* ---------- Touch controls ---------- */
+  #touchControls {
+    position: absolute;
+    inset: 0;
+    z-index: 6;
+    pointer-events: none;
+    display: none;
+    touch-action: none;
+    -webkit-user-select: none;
+    user-select: none;
+    -webkit-tap-highlight-color: transparent;
+  }
+  body.touch #touchControls { display: block; }
+  #joyZone, #whipZone {
+    position: absolute;
+    bottom: 0;
+    height: 50%;
+    pointer-events: auto;
+    touch-action: none;
+  }
+  #joyZone  { left: 0;  width: 50%; }
+  #whipZone { right: 0; width: 50%; }
+  #joyBase, #joyStick {
+    position: absolute;
+    border-radius: 50%;
+    pointer-events: none;
+    opacity: 0;
+    transition: opacity 0.15s;
+  }
+  #joyBase {
+    width: 130px; height: 130px;
+    background: rgba(0,0,0,0.28);
+    border: 2px solid rgba(244,208,80,0.55);
+    box-shadow: 0 0 18px rgba(0,0,0,0.4);
+  }
+  #joyStick {
+    width: 64px; height: 64px;
+    background: radial-gradient(circle at 35% 30%, #ffe48a, #c89b3c 70%, #6b3410);
+    border: 2px solid #6b3410;
+    box-shadow: 0 4px 10px rgba(0,0,0,0.5);
+  }
+  #joyZone.active #joyBase,
+  #joyZone.active #joyStick { opacity: 1; }
+  #whipBtn {
+    position: absolute;
+    right: calc(24px + env(safe-area-inset-right, 0px));
+    bottom: calc(24px + env(safe-area-inset-bottom, 0px));
+    width: 96px; height: 96px;
+    border-radius: 50%;
+    background: radial-gradient(circle at 35% 30%, #ffe48a, #c89b3c 65%, #6b3410);
+    border: 3px solid #6b3410;
+    color: #2a1a0a;
+    font-size: 32px;
+    font-weight: bold;
+    font-family: inherit;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    box-shadow: 0 6px 0 #6b3410, 0 10px 24px rgba(0,0,0,0.5);
+    pointer-events: auto;
+    touch-action: none;
+    -webkit-tap-highlight-color: transparent;
+    user-select: none;
+  }
+  #whipBtn.pressed {
+    transform: translateY(3px);
+    box-shadow: 0 3px 0 #6b3410, 0 5px 12px rgba(0,0,0,0.5);
+  }
+
+  /* ---------- Small-screen layout ---------- */
+  @media (max-width: 820px), (max-height: 600px) {
+    #frame {
+      grid-template-columns: 1fr;
+      grid-template-rows: 1fr;
+      padding: 0;
+      background: #000;
+    }
+    .frieze { display: none; }
+    #wrap {
+      grid-column: 1;
+      grid-row: 1;
+      width: 100vw;
+      height: 100vh;
+      height: 100dvh;
+      border-radius: 0;
+      box-shadow: none;
+    }
+    #hud {
+      padding: 6px 8px;
+      gap: 8px;
+      font-size: 12px;
+      flex-wrap: wrap;
+    }
+    .bar { width: 110px; height: 10px; }
+    .label { font-size: 10px; letter-spacing: 0.5px; }
+    .timeLabel { font-size: 11px; min-width: 0; }
+    #workers { font-size: 12px; }
+    #score { font-size: 16px; }
+    #muteBtn, #fsBtn { padding: 6px 10px; font-size: 14px; min-width: 36px; min-height: 36px; }
+    #overlay h1 { font-size: 36px; letter-spacing: 2px; }
+    #overlay .logo { width: 120px; height: 120px; }
+    #overlay p { font-size: 14px; line-height: 1.4; padding: 0 6px; }
+    #overlay button { padding: 14px 36px; font-size: 22px; letter-spacing: 2px; }
+    .hint { font-size: 11px; letter-spacing: 1px; }
+  }
+
+  @media (max-width: 480px) {
+    #hud .stat .label { display: none; }
+    .bar { width: 80px; }
+    #workers { font-size: 11px; }
+    #score { font-size: 14px; }
+  }
 </style>
 </head>
 <body>
@@ -208,7 +331,15 @@
     </svg>
     <h1>PHARAOH'S PYRAMID</h1>
     <button id="startBtn">PLAY</button>
-    <div class="hint">WASD · SPACE TO WHIP</div>
+    <div class="hint" id="ctrlHint">WASD · SPACE TO WHIP</div>
+  </div>
+  <div id="touchControls">
+    <div id="joyZone">
+      <div id="joyBase"></div>
+      <div id="joyStick"></div>
+    </div>
+    <div id="whipZone"></div>
+    <button id="whipBtn" type="button" aria-label="Whip">𓂸</button>
   </div>
   </div><!-- /#wrap -->
   <div class="frieze frieze-side frieze-right">𓀀 𓁹 𓂀 𓆣 𓋹 𓊪 𓏏 𓅓 𓆑 𓀀 𓁹 𓂀 𓆣 𓋹 𓊪 𓏏</div>
@@ -404,6 +535,98 @@
     mouseY = (e.clientY - r.top) * (H / r.height);
   });
   canvas.addEventListener('mousedown', () => { tryWhip(); });
+
+  // ---------- Touch input ----------
+  const touch = { x: 0, y: 0, active: false };
+  const isTouch = ('ontouchstart' in window) || (navigator.maxTouchPoints || 0) > 0;
+  if (isTouch) {
+    document.body.classList.add('touch');
+    const hint = document.getElementById('ctrlHint');
+    if (hint) hint.textContent = 'DRAG TO MOVE · TAP TO WHIP';
+  }
+
+  const joyZone = document.getElementById('joyZone');
+  const joyBase = document.getElementById('joyBase');
+  const joyStick = document.getElementById('joyStick');
+  const whipZone = document.getElementById('whipZone');
+  const whipBtn = document.getElementById('whipBtn');
+
+  let joyId = null;
+  let joyOriginX = 0, joyOriginY = 0;
+  const JOY_RADIUS = 55;
+  const JOY_BASE_HALF = 65;
+  const JOY_STICK_HALF = 32;
+
+  function setJoyVisual(originX, originY, stickX, stickY) {
+    const zr = joyZone.getBoundingClientRect();
+    joyBase.style.left = (originX - zr.left - JOY_BASE_HALF) + 'px';
+    joyBase.style.top  = (originY - zr.top  - JOY_BASE_HALF) + 'px';
+    joyStick.style.left = (stickX - zr.left - JOY_STICK_HALF) + 'px';
+    joyStick.style.top  = (stickY - zr.top  - JOY_STICK_HALF) + 'px';
+  }
+
+  function endJoy(changedTouches) {
+    for (const t of changedTouches) {
+      if (t.identifier !== joyId) continue;
+      joyId = null;
+      touch.x = 0; touch.y = 0; touch.active = false;
+      joyZone.classList.remove('active');
+      break;
+    }
+  }
+
+  if (joyZone) {
+    joyZone.addEventListener('touchstart', e => {
+      e.preventDefault();
+      if (joyId !== null) return;
+      const t = e.changedTouches[0];
+      joyId = t.identifier;
+      joyOriginX = t.clientX;
+      joyOriginY = t.clientY;
+      touch.x = 0; touch.y = 0; touch.active = true;
+      joyZone.classList.add('active');
+      setJoyVisual(joyOriginX, joyOriginY, joyOriginX, joyOriginY);
+    }, { passive: false });
+
+    joyZone.addEventListener('touchmove', e => {
+      e.preventDefault();
+      for (const t of e.changedTouches) {
+        if (t.identifier !== joyId) continue;
+        let ddx = t.clientX - joyOriginX;
+        let ddy = t.clientY - joyOriginY;
+        const dist = Math.hypot(ddx, ddy);
+        if (dist > JOY_RADIUS) {
+          ddx = ddx / dist * JOY_RADIUS;
+          ddy = ddy / dist * JOY_RADIUS;
+        }
+        touch.x = ddx / JOY_RADIUS;
+        touch.y = ddy / JOY_RADIUS;
+        setJoyVisual(joyOriginX, joyOriginY, joyOriginX + ddx, joyOriginY + ddy);
+        break;
+      }
+    }, { passive: false });
+
+    joyZone.addEventListener('touchend',    e => { e.preventDefault(); endJoy(e.changedTouches); }, { passive: false });
+    joyZone.addEventListener('touchcancel', e => { e.preventDefault(); endJoy(e.changedTouches); }, { passive: false });
+  }
+
+  function whipTouchPress(e) {
+    e.preventDefault();
+    tryWhip();
+    if (whipBtn) {
+      whipBtn.classList.add('pressed');
+      setTimeout(() => whipBtn.classList.remove('pressed'), 110);
+    }
+  }
+  if (whipZone) whipZone.addEventListener('touchstart', whipTouchPress, { passive: false });
+  if (whipBtn)  whipBtn.addEventListener('touchstart',  whipTouchPress, { passive: false });
+
+  // Block iOS pinch-zoom, double-tap zoom, and long-press context menu
+  document.addEventListener('gesturestart',  e => e.preventDefault());
+  document.addEventListener('gesturechange', e => e.preventDefault());
+  document.addEventListener('gestureend',    e => e.preventDefault());
+  document.addEventListener('contextmenu',   e => e.preventDefault());
+  document.addEventListener('dblclick',      e => e.preventDefault());
 
   // ---------- Pharaoh ----------
   const pharaoh = {
@@ -1111,16 +1334,21 @@
 
     // Pharaoh movement
     let dx = 0, dy = 0;
-    if (keys['a'] || keys['arrowleft']) dx -= 1;
-    if (keys['d'] || keys['arrowright']) dx += 1;
-    if (keys['w'] || keys['arrowup']) dy -= 1;
-    if (keys['s'] || keys['arrowdown']) dy += 1;
-    const mag = Math.hypot(dx, dy);
-    if (mag > 0) {
-      pharaoh.vx = (dx/mag) * pharaoh.speed;
-      pharaoh.vy = (dy/mag) * pharaoh.speed;
-      pharaoh.walkPhase += 0.25;
-      if (dx !== 0) pharaoh.facing = Math.sign(dx);
+    if (touch.active) {
+      dx = touch.x; dy = touch.y;
+    } else {
+      if (keys['a'] || keys['arrowleft']) dx -= 1;
+      if (keys['d'] || keys['arrowright']) dx += 1;
+      if (keys['w'] || keys['arrowup']) dy -= 1;
+      if (keys['s'] || keys['arrowdown']) dy += 1;
+    }
+    let mag = Math.hypot(dx, dy);
+    if (mag > 1) { dx /= mag; dy /= mag; mag = 1; }
+    if (mag > 0.08) {
+      pharaoh.vx = dx * pharaoh.speed;
+      pharaoh.vy = dy * pharaoh.speed;
+      pharaoh.walkPhase += 0.25 * mag;
+      if (Math.abs(dx) > 0.15) pharaoh.facing = Math.sign(dx);
     } else {
       pharaoh.vx *= 0.6; pharaoh.vy *= 0.6;
       pharaoh.walkPhase *= 0.9;
