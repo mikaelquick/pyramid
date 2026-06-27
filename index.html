@@ -1994,7 +1994,7 @@
     }
 
     if (!hit) {
-      spawnFloater(pharaoh.x + pharaoh.facing*60, pharaoh.y - 20, '*CRACK*', '#ffffff');
+      spawnFloater(pharaoh.x + pharaoh.facing*60, pharaoh.y - 20, '𓄿', '#ffffff');
     }
   }
 
@@ -2083,8 +2083,9 @@
       pharaoh.walkPhase *= 0.9;
     }
     pharaoh.x = Math.max(40, Math.min(W-40, pharaoh.x + pharaoh.vx));
-    // Begränsa Y så Farao inte kan gå "ovanför" sphinxen (sphinxens fötter ~y=480).
-    pharaoh.y = Math.max(485, Math.min(H-30, pharaoh.y + pharaoh.vy));
+    // Begränsa Y så Farao kan gå upp till sphinxens topp (sphinxen sträcker sig
+    // ungefär från y=394 upp till y=480) men inte högre — annars ser det ut som han flyger.
+    pharaoh.y = Math.max(400, Math.min(H-30, pharaoh.y + pharaoh.vy));
     clampOutOfWaterhole(pharaoh, 4);
 
     const dayPhase = getDayPhase(); // 0=natt 1=dag
