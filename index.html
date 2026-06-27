@@ -1369,9 +1369,24 @@
     const womenKiltTones = ['#f0e8d0','#f4e0b8','#e8d8a8'];
     const type = forcedType || pickWorkerType();
     const speedMul = (type === 'child') ? 1.08 : (type === 'fat') ? 0.78 : 1.0;
+    // Personlighet: påverkar hur snabbt energin tappas och hur ofta de spontant
+    // går tillbaka till jobb mitt under slöandet. Alla kan dock fortfarande
+    // gå in i väggen och bli lata till slut.
+    //   0.35 = arbetsmyra (rar, ~6%), 1.0 = normal,
+    //   1.4 = tröttnar snabbt (~24%), 1.8 = krönisk lat (~6%)
+    let workEthic = 1.0;
+    const personRoll = Math.random();
+    if (personRoll < 0.06)      workEthic = 0.35;
+    else if (personRoll < 0.30) workEthic = 1.4;
+    else if (personRoll < 0.36) workEthic = 1.8;
+    // Favorit-slö-sysselsättning — varje slav har en de gillar mest
+    const favs = ['sleeping', 'playing_friend', 'playing_animal', 'dancing', 'drinking'];
+    const favoriteSlackAction = favs[Math.floor(Math.random() * favs.length)];
     return {
       type,
       speedMul,
+      workEthic,
+      favoriteSlackAction,
       x: spawnFromEdge ? -20 : (240 + Math.random()*820),
       y: spawnFromEdge ? (530 + Math.random()*80) : (490 + Math.random()*180),
       vx: 0, vy: 0,
@@ -1738,14 +1753,82 @@
   }
 
   // ---------- Rest zones (where slackers go to escape work) ----------
+  // ---------- Bryggeri (öl-kruka i sanden, uppe till vänster — bort från bygget) ----------
+  const BREWERY = {
+    cx: 85,
+    cy: 468,
+    rx: 24,
+    ry: 32,
+  };
+
+  // ---------- Facklor (alltid synliga, men bara tända på natten) ----------
+  // Slavar går dit och tänder dem vid skymning — bara några stycken försöker.
+  const TORCHES = [
+    { x: 470, y: 480, lit: false, assignedTo: null },
+    { x: 810, y: 480, lit: false, assignedTo: null },
+    { x: 280, y: 510, lit: false, assignedTo: null },
+    { x: 750, y: 540, lit: false, assignedTo: null },
+  ];
+
   const REST_ZONES = [
-    { x: 75,   y: 670, name: 'left',      facing: 1,  onSphinx: false, atWaterhole: false, seated: false },
-    { x: 600,  y: 690, name: 'front',     facing: 1,  onSphinx: false, atWaterhole: false, seated: false },
-    { x: 380,  y: 410, name: 'sphinx',    facing: 1,  onSphinx: true,  atWaterhole: false, seated: true  },
-    { x: 1080, y: 685, name: 'waterhole', facing: -1, onSphinx: false, atWaterhole: true,  seated: true  },
+    { x: 75,   y: 670, name: 'left',      facing: 1,  onSphinx: false, atWaterhole: false, atBrewery: false, seated: false },
+    { x: 600,  y: 690, name: 'front',     facing: 1,  onSphinx: false, atWaterhole: false, atBrewery: false, seated: false },
+    { x: 380,  y: 410, name: 'sphinx',    facing: 1,  onSphinx: true,  atWaterhole: false, atBrewery: false, seated: true  },
+    { x: 1080, y: 685, name: 'waterhole', facing: -1, onSphinx: false, atWaterhole: true,  atBrewery: false, seated: true  },
+    { x: 120,  y: 468, name: 'brewery',   facing: -1, onSphinx: false, atWaterhole: false, atBrewery: true,  seated: true  },
   ];
   function pickRestZone() {
-    return REST_ZONES[Math.floor(Math.random() * REST_ZONES.length)];
+    // Bryggeriet får ha max 2 samtidiga gäster — annars blir det rörigt
+    const brewCount = workers.filter(w =>
+      w.state === 'lazy' && w.restZone && w.restZone.atBrewery).length;
+    const pool = brewCount >= 2
+      ? REST_ZONES.filter(z => !z.atBrewery)
+      : REST_ZONES;
+    return pool[Math.floor(Math.random() * pool.length)];
+  }
+
+  // Välj slö-aktivitet och vilo-zon för en arbetare (favoriter + brewery-cap)
+  function pickLazyBehavior(w) {
+    const brewCount = workers.filter(o =>
+      o !== w && o.state === 'lazy' && o.restZone && o.restZone.atBrewery).length;
+    const brewFull = brewCount >= 2;
+
+    // 60% chans för favorit, annars random
+    let action;
+    if (w.favoriteSlackAction && Math.random() < 0.6) {
+      action = w.favoriteSlackAction;
+    } else {
+      const r = Math.random();
+      if (r < 0.25)      action = 'sleeping';
+      else if (r < 0.47) action = 'playing_friend';
+      else if (r < 0.72) action = 'playing_animal';
+      else if (r < 0.86) action = 'dancing';
+      else               action = 'drinking';
+    }
+
+    // Brewery fullt → välj en annan aktivitet
+    if (action === 'drinking' && brewFull) {
+      const alts = ['sleeping', 'playing_friend', 'dancing'];
+      action = alts[Math.floor(Math.random() * alts.length)];
+    }
+
+    // Tilldela zon
+    if (action === 'drinking') {
+      w.restZone = REST_ZONES.find(z => z.atBrewery);
+    } else if (action === 'playing_animal') {
+      // Djurleekare kan inte sitta på sphinx/waterhole/brewery
+      const ok = REST_ZONES.filter(z => !z.seated && !z.atBrewery);
+      w.restZone = ok[Math.floor(Math.random() * ok.length)];
+    } else {
+      // Övriga: alla utom bryggeriet (det är drinking-only)
+      const ok = REST_ZONES.filter(z => !z.atBrewery);
+      w.restZone = ok[Math.floor(Math.random() * ok.length)];
+    }
+    w.lazyAction = action;
+    w.lazyTimer = 0;
+    w.lazyTarget = null;
+    w.restSpot = pickRestSpot(w.restZone, w);
+    w.atRestZone = false;
   }
   // Hitta en ledig position vid en zon — undvik att hamna ovanpå andra som vilar där
   function pickRestSpot(zone, w) {
@@ -1767,6 +1850,24 @@
         if (!clash) return { x: tx, y: ty };
       }
       return { x: WATERHOLE.cx + (Math.random() - 0.5) * sitXSpread, y: sitYBase };
+    }
+
+    // Bryggeri-zonen: sittande, max 2 platser — en på varje sida av krukan
+    if (zone.atBrewery) {
+      const positions = [
+        { x: BREWERY.cx - 36, y: BREWERY.cy + 14 },
+        { x: BREWERY.cx + 36, y: BREWERY.cy + 14 },
+      ];
+      for (const p of positions) {
+        let clash = false;
+        for (const other of workers) {
+          if (other === w) continue;
+          if (other.state !== 'lazy' || !other.atRestZone) continue;
+          if (Math.hypot(other.x - p.x, other.y - p.y) < 26) { clash = true; break; }
+        }
+        if (!clash) return p;
+      }
+      return positions[0];
     }
 
     const spread = zone.onSphinx ? 50 : 70;
@@ -2153,6 +2254,47 @@
         continue;
       }
 
+      // Fackla-tändar-uppdrag har högsta prioritet (när natten faller)
+      if (w.torchTask) {
+        const t = w.torchTask;
+        if (t.lit || w.state !== 'idle') {
+          if (t.assignedTo === w) t.assignedTo = null;
+          w.torchTask = null;
+          w.torchIgniteTimer = 0;
+        } else {
+          const tx = t.x;
+          const ty = t.y + 30;  // stå vid stångens bas
+          const dxT = tx - w.x, dyT = ty - w.y;
+          const dT = Math.hypot(dxT, dyT);
+          if (dT > 14) {
+            moveWorkerToward(w, tx, ty);
+          } else {
+            w.facing = (t.x > w.x) ? 1 : -1;
+            w.torchIgniteTimer = (w.torchIgniteTimer || 0) + 1;
+            w.pickupTimer = 30; // använd böjningsposen så det syns att han gör något
+            if (w.torchIgniteTimer > 36) {
+              t.lit = true;
+              t.assignedTo = null;
+              w.torchTask = null;
+              w.torchIgniteTimer = 0;
+              // gnistor när den tänds
+              for (let i = 0; i < 12; i++) {
+                state.cracks.push({
+                  x: t.x + (Math.random()-0.5)*4,
+                  y: t.y - 4,
+                  vx: (Math.random()-0.5)*1.8,
+                  vy: -Math.random()*2.2 - 0.8,
+                  life: 1.0,
+                  color: i < 6 ? '#ffd060' : '#ff8030',
+                  grav: 0.08,
+                });
+              }
+            }
+          }
+          continue;
+        }
+      }
+
       w.scared = Math.max(0, w.scared - 0.04);
 
       // Djupsömn — när de väl ligger ner och sover är de helt avstängda
@@ -2162,7 +2304,14 @@
       if (w.wakeBoost > 0) {
         w.wakeBoost--; // ingen energidränering under skyddstiden
       } else if (!inDeepSleep) {
-        w.energy -= energyDrain + Math.random()*0.05;
+        w.energy -= (energyDrain + Math.random()*0.05) * (w.workEthic || 1);
+      }
+      // Berusad efter krog-besök — räkna ner och hicka emellanåt
+      if (w.drunkTimer > 0) {
+        w.drunkTimer--;
+        if (Math.random() < 0.006) {
+          spawnChatBubble(w, '𓆑');
+        }
       }
 
       // farao nära → liten energiboost (inte för sovande)
@@ -2172,25 +2321,15 @@
 
       if (w.energy <= 5 && w.state !== 'lazy') {
         w.state = 'lazy';
-        // välj lat-beteende
-        const r = Math.random();
-        if (r < 0.30) w.lazyAction = 'sleeping';
-        else if (r < 0.55) w.lazyAction = 'playing_friend';
-        else if (r < 0.85) w.lazyAction = 'playing_animal'; // de gillar djur extra mycket
-        else w.lazyAction = 'dancing';
-        w.lazyTimer = 0;
-        w.lazyTarget = null;
-        w.restZone = pickRestZone();
-        // Djurkär lekare måste kunna gå runt — hindra dem från sittande zoner (sphinx/waterhole)
-        if (w.restZone.seated && w.lazyAction === 'playing_animal') {
-          const standingZones = REST_ZONES.filter(z => !z.seated);
-          w.restZone = standingZones[Math.floor(Math.random() * standingZones.length)];
-        }
-        w.restSpot = pickRestSpot(w.restZone, w);
-        w.atRestZone = false;
+        pickLazyBehavior(w);
         w.target = null;
         w.carrying = false;
       } else if (w.state === 'lazy' && w.energy > 25) {
+        // Om de drack — bli berusade på vägen tillbaka (drunkness → drunkTimer)
+        if (w.lazyAction === 'drinking' && (w.drunkness || 0) > 0.1) {
+          w.drunkTimer = Math.floor((w.drunkness || 0) * 720);  // upp till ~12s
+          w.drunkness = 0;
+        }
         w.state = 'idle';
         w.lazyTarget = null;
         w.restZone = null;
@@ -2201,6 +2340,49 @@
       if (w.state === 'lazy') {
         w.lazyTimer++;
 
+        // Spontant-vakna-och-jobba-igen: efter ~10s slöande finns en liten chans
+        // varje frame att de tröttnar på att slöa och går tillbaka. Arbetsmyror
+        // (låg workEthic) får mycket högre chans, kroniska latmaskar nästan ingen.
+        if (w.atRestZone && w.lazyTimer > 600) {
+          const ethic = w.workEthic || 1.0;
+          const wakeChance = Math.max(0, 0.0007 * (1.9 - ethic));
+          if (Math.random() < wakeChance) {
+            // Hantera ev. drunkness före transition (drick-väg-tillbaka)
+            if (w.lazyAction === 'drinking' && (w.drunkness || 0) > 0.1) {
+              w.drunkTimer = Math.floor(w.drunkness * 720);
+              w.drunkness = 0;
+            }
+            w.state = 'idle';
+            w.energy = Math.max(35, w.energy);
+            w.lazyTarget = null;
+            w.restZone = null;
+            w.restSpot = null;
+            w.atRestZone = false;
+            w.wakeBoost = 120;  // 2s skydd så de inte direkt blir lata igen
+            spawnFloater(w.x, w.y - 30, '𓏏 𓊪!', '#a0e0a0');
+            continue;
+          }
+        }
+
+        // Byta-slö-aktivitet efter mycket lång tid (~25s+). Sällsynt men händer.
+        // De har favoriter men ibland tröttnar de på sin nuvarande syssla.
+        if (w.atRestZone && w.lazyTimer > 1500 && Math.random() < 0.0004) {
+          const prevAction = w.lazyAction;
+          // Hantera drunkness om de drack och byter bort
+          if (prevAction === 'drinking' && (w.drunkness || 0) > 0.1) {
+            w.drunkTimer = Math.floor(w.drunkness * 720);
+            w.drunkness = 0;
+          }
+          // Plocka ny aktivitet/zon — försök undvika exakt samma
+          for (let tries = 0; tries < 3; tries++) {
+            pickLazyBehavior(w);
+            if (w.lazyAction !== prevAction) break;
+          }
+          // pickLazyBehavior nollställde lazyTimer; håll det så de inte direkt
+          // byter igen
+          continue;
+        }
+
         // Fas 1: gå till sin vilo-plats (bort från byggområdet)
         if (!w.atRestZone && w.restSpot) {
           const dx = w.restSpot.x - w.x;
@@ -2209,6 +2391,10 @@
           if (d < 14) {
             w.atRestZone = true;
             w.facing = w.restZone.facing;
+            // Bryggeri: vänd dig mot krukan (en på varje sida ser ut att dricka tillsammans)
+            if (w.restZone.atBrewery) {
+              w.facing = (w.x < BREWERY.cx) ? 1 : -1;
+            }
             // snappa exakt till spot för att undvika dubblar
             w.x = w.restSpot.x;
             w.y = w.restSpot.y;
@@ -2219,8 +2405,10 @@
             w.y += (dy/d) * speed;
             w.walkPhase += 0.16;
             if (dx !== 0) w.facing = Math.sign(dx);
-            // håll inom skärm — släpp y-min vid sphinx-zonen
-            const minY = (w.restZone && w.restZone.onSphinx) ? 380 : 490;
+            // håll inom skärm — sphinx-zonen tillåter högre upp, bryggeriet också
+            const minY = (w.restZone && w.restZone.onSphinx) ? 380
+                       : (w.restZone && w.restZone.atBrewery) ? 460
+                       : 490;
             w.x = Math.max(40, Math.min(W - 40, w.x));
             w.y = Math.max(minY, Math.min(H - 30, w.y));
             continue;
@@ -2354,6 +2542,18 @@
               }
             }
           }
+        } else if (w.lazyAction === 'drinking') {
+          // Stå vid krukan, böja sig periodvis och dricka
+          w.vx *= 0.4; w.vy *= 0.4;
+          w.facing = (w.x < BREWERY.cx) ? 1 : -1;
+          w.drinkPhase = (w.drinkPhase || 0) + 0.05;
+          // Bli gradvis mer berusad
+          w.drunkness = Math.min(1, (w.drunkness || 0) + 0.0028);
+          // Sluddra hieroglyfer då och då
+          if (Math.random() < 0.008) {
+            const slurs = ['𓆑', '𓅓', '𓂀?', '𓀀!', '𓄿', '𓋹?'];
+            spawnChatBubble(w, slurs[Math.floor(Math.random()*slurs.length)]);
+          }
         } else if (w.lazyAction === 'dancing') {
           // Hitta en annan dansare på samma zon → dansa i takt och vänd dem mot varann
           let partner = null;
@@ -2377,7 +2577,9 @@
           w.vx *= 0.5; w.vy *= 0.5;
         }
         // håll inom skärm (sphinx-zonen tillåter högre upp; vattenhåls-zonen lägre ner)
-        const minY = (w.restZone && w.restZone.onSphinx) ? 380 : 490;
+        const minY = (w.restZone && w.restZone.onSphinx) ? 380
+                   : (w.restZone && w.restZone.atBrewery) ? 460
+                   : 490;
         const maxY = (w.restZone && w.restZone.atWaterhole) ? (WATERHOLE.cy + WATERHOLE.ry - 8) : H - 30;
         w.x = Math.max(40, Math.min(W - 40, w.x));
         w.y = Math.max(minY, Math.min(maxY, w.y));
@@ -2498,6 +2700,9 @@
     // Animals
     for (const a of state.animals) updateAnimal(a);
 
+    // Facklor — släck vid dag, tilldela tändare vid natt
+    updateTorches();
+
     // Daytime birds — spawn små flockar då och då när det är ljust
     if (dayPhase > 0.4 && state.birds.length < 18 && Math.random() < 0.006) {
       const fromLeft = Math.random() < 0.5;
@@ -2614,12 +2819,75 @@
     return '🌙 Night';
   }
 
+  function updateTorches() {
+    const dayPhase = getDayPhase();
+    const isNight = dayPhase < 0.55;
+    if (!isNight) {
+      // Dag: vinden blåser ut allt; ev. orphan-assignments rensas
+      for (const t of TORCHES) {
+        if (t.lit) t.lit = false;
+        if (t.assignedTo) {
+          if (t.assignedTo.torchTask === t) t.assignedTo.torchTask = null;
+          t.assignedTo = null;
+        }
+      }
+      return;
+    }
+    // Natt: tilldela tändare omedelbart till varje släckt fackla.
+    // Föredra idle-arbetare; om inga finns kvar, väck en slö (även slöa gillar ljus).
+    for (const t of TORCHES) {
+      if (t.lit) continue;
+      if (t.assignedTo) {
+        const a = t.assignedTo;
+        if (!workers.includes(a) || a.torchTask !== t ||
+            a.state === 'downed' || a.state === 'falling') {
+          t.assignedTo = null;
+        } else {
+          continue;
+        }
+      }
+      // Hitta lämplig arbetare — idle först, sen lazy
+      const baseEligible = w => !w.torchTask && !w.enteringFrom && !w.carrying &&
+                                w.state !== 'downed' && w.state !== 'falling';
+      let pool = workers.filter(w => w.state === 'idle' && baseEligible(w));
+      let fromLazy = false;
+      if (pool.length === 0) {
+        pool = workers.filter(w => w.state === 'lazy' && baseEligible(w));
+        fromLazy = true;
+      }
+      if (pool.length === 0) continue;
+      const chosen = pool[Math.floor(Math.random() * pool.length)];
+      chosen.torchTask = t;
+      chosen.torchIgniteTimer = 0;
+      if (fromLazy) {
+        // Väck den slöa tillfälligt så de kan tända facklan
+        chosen.state = 'idle';
+        chosen.energy = Math.max(chosen.energy, 35);
+        chosen.lazyTarget = null;
+        chosen.restZone = null;
+        chosen.restSpot = null;
+        chosen.atRestZone = false;
+      }
+      t.assignedTo = chosen;
+    }
+  }
+
   function moveWorkerToward(w, tx, ty) {
     const dx = tx - w.x, dy = ty - w.y;
     const d = Math.hypot(dx, dy);
     if (d < 0.001) return;
     // baseline 1.0, en aning snabbare vid full energi, lite extra brådska kort efter pisk
-    const speed = (0.9 + (w.energy/100) * 0.6 + (w.scared * 0.5)) * (w.speedMul || 1);
+    let speed = (0.9 + (w.energy/100) * 0.6 + (w.scared * 0.5)) * (w.speedMul || 1);
+    // Berusad? Vacklande gång, långsammare och med ett sidledswobble
+    const drunk = Math.min(1, (w.drunkTimer || 0) / 600);
+    if (drunk > 0) {
+      speed *= (1 - drunk * 0.35);
+      const wobble = drunk * Math.sin(state.time * 0.16 + (w.drinkPhase || 0)) * 1.4;
+      // perpendicular to direction of travel
+      const nx = -dy / d, ny = dx / d;
+      w.x += nx * wobble;
+      w.y += ny * wobble * 0.35;  // mest sidledswobble, lite mindre Y
+    }
     w.x += (dx/d) * speed;
     w.y += (dy/d) * speed;
     w.walkPhase += 0.2;
@@ -2705,8 +2973,11 @@
     // Runt vattenhål i nedre-högra hörnet
     drawWaterhole(dayPhase);
 
-    // Eldar/facklor som tänds på natten
-    if (dayPhase < 0.6) drawTorches(dayPhase);
+    // Bryggeri-kruka (öl) — slackerplats i mitten
+    drawBrewery(dayPhase);
+
+    // Facklor — stångerna syns alltid, lågorna bara när någon tänt dem på natten
+    drawTorches(dayPhase);
 
     // Quarry
     drawQuarry();
@@ -4326,35 +4597,169 @@
     }
   }
 
+  // ---------- Bryggeri-kruka ----------
+  function drawBrewery(dayPhase) {
+    const cx = BREWERY.cx, cy = BREWERY.cy;
+
+    // marken-skugga
+    ctx.fillStyle = 'rgba(20,8,4,0.45)';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 24, 36, 6, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // färger med dygnstoning
+    const clay      = mixHex('#b8783a', '#3a1e10', 1 - dayPhase);
+    const clayDark  = mixHex('#7a4818', '#1a0e08', 1 - dayPhase);
+    const clayLight = mixHex('#d89858', '#5a3018', 1 - dayPhase);
+    const paint     = mixHex('#2a1408', '#0a0402', 1 - dayPhase);
+
+    // Liten kruka tippad framför (skvalpad öl) — undviker att krocka med sittande slavar
+    drawSmallJug(cx + 6, cy + 28, '#a06030', '#5a2810', true);
+
+    // Huvudkruka — bulbös amfora
+    ctx.fillStyle = clay;
+    ctx.beginPath();
+    ctx.moveTo(cx - 7, cy - 42);
+    ctx.quadraticCurveTo(cx - 20, cy - 30, cx - 22, cy - 8);
+    ctx.quadraticCurveTo(cx - 24, cy + 14, cx - 8, cy + 24);
+    ctx.lineTo(cx + 8, cy + 24);
+    ctx.quadraticCurveTo(cx + 24, cy + 14, cx + 22, cy - 8);
+    ctx.quadraticCurveTo(cx + 20, cy - 30, cx + 7, cy - 42);
+    ctx.closePath();
+    ctx.fill();
+
+    // Skugga på vänster sida
+    ctx.fillStyle = clayDark;
+    ctx.beginPath();
+    ctx.moveTo(cx - 7, cy - 42);
+    ctx.quadraticCurveTo(cx - 20, cy - 30, cx - 22, cy - 8);
+    ctx.quadraticCurveTo(cx - 24, cy + 14, cx - 8, cy + 24);
+    ctx.lineTo(cx - 3, cy + 24);
+    ctx.lineTo(cx - 3, cy - 42);
+    ctx.closePath();
+    ctx.fill();
+
+    // Highlight höger
+    ctx.fillStyle = clayLight;
+    ctx.beginPath();
+    ctx.moveTo(cx + 13, cy - 26);
+    ctx.quadraticCurveTo(cx + 19, cy - 6, cx + 14, cy + 18);
+    ctx.lineTo(cx + 18, cy + 14);
+    ctx.quadraticCurveTo(cx + 24, cy - 6, cx + 17, cy - 26);
+    ctx.closePath();
+    ctx.fill();
+
+    // Handtag (öron) på sidorna
+    ctx.strokeStyle = clayDark;
+    ctx.lineWidth = 4.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.arc(cx - 21, cy - 18, 8, -Math.PI*0.6, Math.PI*0.55);
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(cx + 21, cy - 18, 8, Math.PI - Math.PI*0.55, Math.PI + Math.PI*0.6, true);
+    ctx.stroke();
+
+    // Övre kant (mynning)
+    ctx.fillStyle = clayDark;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - 42, 8, 3, 0, 0, Math.PI*2);
+    ctx.fill();
+    // Innersta hålet
+    ctx.fillStyle = 'rgba(20,5,2,0.85)';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - 42, 5, 1.8, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Hieroglyf-band runt mitten
+    ctx.fillStyle = paint;
+    ctx.fillRect(cx - 19, cy - 12, 38, 2);
+    ctx.fillRect(cx - 19, cy + 8,  38, 2);
+    // små hieroglyfer mellan banden
+    ctx.fillStyle = paint;
+    ctx.font = '9px "Noto Sans Egyptian Hieroglyphs", "Segoe UI Historic", serif';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('𓊪  𓋹  𓏏', cx, cy - 1);
+
+    // Skum vid kanten (om någon nyss druckit)
+    const foam = mixHex('#f4e4c4', '#3a2c1c', 1 - dayPhase);
+    ctx.fillStyle = foam;
+    ctx.beginPath();
+    ctx.arc(cx,     cy - 43, 3.5, 0, Math.PI*2);
+    ctx.arc(cx - 4, cy - 44, 2.2, 0, Math.PI*2);
+    ctx.arc(cx + 4, cy - 44, 2.2, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  function drawSmallJug(cx, cy, light, dark, tipped) {
+    ctx.save();
+    if (tipped) ctx.translate(cx, cy), ctx.rotate(0.4), ctx.translate(-cx, -cy);
+    ctx.fillStyle = light;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy, 10, 6, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = dark;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy - 4, 4, 1.5, 0, 0, Math.PI*2);
+    ctx.fill();
+    ctx.restore();
+  }
+
   function drawTorches(dayPhase) {
-    // facklor runt byggplatsen, tänds när mörkt
     const intensity = 1 - dayPhase;
-    const torches = [
-      {x: 470, y: 480},
-      {x: 810, y: 480},
-      {x: 280, y: 510},
-      {x: 750, y: 540},
-    ];
-    for (const t of torches) {
-      // stång
+    for (const t of TORCHES) {
+      // stång (alltid synlig)
       ctx.fillStyle = '#5a3818';
       ctx.fillRect(t.x - 2, t.y, 4, 30);
-      // flamma
-      const flick = Math.sin(state.time*0.3 + t.x) * 2;
-      ctx.fillStyle = `rgba(255,140,40,${0.9 * intensity})`;
-      ctx.beginPath();
-      ctx.ellipse(t.x, t.y - 4 + flick, 5, 10, 0, 0, Math.PI*2);
-      ctx.fill();
-      ctx.fillStyle = `rgba(255,220,120,${intensity})`;
-      ctx.beginPath();
-      ctx.ellipse(t.x, t.y - 2 + flick, 2, 5, 0, 0, Math.PI*2);
-      ctx.fill();
-      // glöd-ljus
-      const g = ctx.createRadialGradient(t.x, t.y, 5, t.x, t.y, 80);
-      g.addColorStop(0, `rgba(255,180,80,${0.25*intensity})`);
-      g.addColorStop(1, 'rgba(255,180,80,0)');
-      ctx.fillStyle = g;
-      ctx.fillRect(t.x - 80, t.y - 80, 160, 160);
+      // bas-fäste
+      ctx.fillStyle = '#3a2010';
+      ctx.fillRect(t.x - 4, t.y + 27, 8, 4);
+
+      if (t.lit) {
+        // facklehuvud (omlindat med tyg)
+        ctx.fillStyle = '#3a1a08';
+        ctx.beginPath();
+        ctx.ellipse(t.x, t.y - 1, 4, 6, 0, 0, Math.PI*2);
+        ctx.fill();
+        // flamma
+        const flick = Math.sin(state.time*0.3 + t.x) * 2;
+        ctx.fillStyle = `rgba(255,140,40,${Math.max(0.4, 0.9 * intensity)})`;
+        ctx.beginPath();
+        ctx.ellipse(t.x, t.y - 6 + flick, 5, 10, 0, 0, Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = `rgba(255,220,120,${Math.max(0.45, intensity)})`;
+        ctx.beginPath();
+        ctx.ellipse(t.x, t.y - 4 + flick, 2, 5, 0, 0, Math.PI*2);
+        ctx.fill();
+        // glöd-ljus
+        const g = ctx.createRadialGradient(t.x, t.y, 5, t.x, t.y, 80);
+        g.addColorStop(0, `rgba(255,180,80,${0.25*intensity})`);
+        g.addColorStop(1, 'rgba(255,180,80,0)');
+        ctx.fillStyle = g;
+        ctx.fillRect(t.x - 80, t.y - 80, 160, 160);
+      } else {
+        // släckt facklehuvud — sotat tyg, ingen flamma
+        ctx.fillStyle = '#2a1208';
+        ctx.beginPath();
+        ctx.ellipse(t.x, t.y - 1, 4, 6, 0, 0, Math.PI*2);
+        ctx.fill();
+        ctx.fillStyle = '#1a0a04';
+        ctx.beginPath();
+        ctx.ellipse(t.x, t.y - 2, 2.5, 3.5, 0, 0, Math.PI*2);
+        ctx.fill();
+        // liten rökrest om den nyss slocknade (vid gryning)
+        if (dayPhase > 0.55 && dayPhase < 0.72) {
+          const smokeA = (0.72 - dayPhase) / 0.17 * 0.35;
+          ctx.fillStyle = `rgba(80,70,60,${smokeA})`;
+          for (let i = 0; i < 3; i++) {
+            const sy = (state.time * 0.4 + i * 30) % 50;
+            ctx.beginPath();
+            ctx.arc(t.x + Math.sin(sy*0.1)*3, t.y - 5 - sy, 2 + sy*0.05, 0, Math.PI*2);
+            ctx.fill();
+          }
+        }
+      }
     }
   }
 
@@ -4648,6 +5053,37 @@
         ctx.fillStyle = '#8a1010';
         ctx.fillRect(x - 5, y - 8 + sway, 4, 3);
       }
+
+      // Ancient lerskål om de dricker (enkel form, ingen handle)
+      if (w.lazyAction === 'drinking') {
+        const dp = w.drinkPhase || 0;
+        const raise = Math.max(0, Math.sin(dp * 0.6));  // 0..1, periodiskt höjt
+        const bx = x + 4 * f;
+        const by = y - 4 + sway - raise * 10;
+        // Skål-kropp (liten avsmalnande lerskål)
+        ctx.fillStyle = '#7a3818';
+        ctx.beginPath();
+        ctx.moveTo(bx - 4, by - 2);
+        ctx.lineTo(bx + 4, by - 2);
+        ctx.lineTo(bx + 3, by + 2);
+        ctx.lineTo(bx - 3, by + 2);
+        ctx.closePath();
+        ctx.fill();
+        // Inre öl (mörk)
+        ctx.fillStyle = '#2a1408';
+        ctx.fillRect(bx - 3, by - 2, 6, 1);
+        // Lerigare överkant
+        ctx.fillStyle = '#a0582a';
+        ctx.fillRect(bx - 4, by - 2.5, 8, 0.6);
+        // Arm som håller skålen
+        ctx.fillStyle = w.skin;
+        ctx.fillRect(x + 4*f - 1, y - 3 + sway, 3, Math.max(2, 7 - raise * 7));
+        // Liten droppe vid mungipan när han precis tagit en klunk
+        if (raise > 0.85 && Math.random() < 0.25) {
+          ctx.fillStyle = '#6a3008';
+          ctx.fillRect(x + (f > 0 ? 2 : -3), y - 11 + sway, 1, 2);
+        }
+      }
     } else {
       const legSwing = Math.sin(w.walkPhase) * 3;
       ctx.fillStyle = w.skin;
@@ -4771,6 +5207,7 @@
         else if (w.lazyAction === 'playing_animal') { icon = '♥'; color = '#ff8080'; }
         else if (w.lazyAction === 'dancing') { icon = '♫'; color = '#ffd0a0'; }
         else if (w.lazyAction === 'sleeping') { icon = 'z'; color = '#b0c0e0'; }
+        else if (w.lazyAction === 'drinking') { icon = '~'; color = '#f0e070'; }
         ctx.fillStyle = color;
         ctx.font = 'bold 16px Georgia';
         ctx.textAlign = 'center';
@@ -5269,6 +5706,8 @@
     spawnWorkers(TOTAL_WORKERS);
     state.animals.length = 0;
     spawnAnimals(3);
+    // Återställ facklor — alla släckta och utan tändar-uppdrag
+    for (const t of TORCHES) { t.lit = false; t.assignedTo = null; }
     pharaoh.x = W/2; pharaoh.y = H*0.72;
     overlay.classList.add('hidden');
     buildMusicQueue();
