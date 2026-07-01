@@ -607,11 +607,27 @@
       a.play().catch(() => {});
     } catch (e) {}
   }
-  const MUSIC_TRACKS = ['audio/music.mp3', 'audio/music2.mp3', 'audio/music3.mp3', 'audio/music4.mp3'];
+  // Transform-jingle när Farao → Caesar
+  const transformSound = new Audio('audio/transform.wav');
+  transformSound.volume = 0.7;
+  transformSound.preload = 'auto';
+  function playTransformSound() {
+    if (!audioOn.value) return;
+    try {
+      transformSound.currentTime = 0;
+      transformSound.play().catch(() => {});
+    } catch (e) {}
+  }
+  const EGYPT_MUSIC_TRACKS = ['audio/music.mp3', 'audio/music2.mp3', 'audio/music3.mp3', 'audio/music4.mp3'];
+  const ROME_MUSIC_TRACKS = ['audio/rome2.mp3'];
   let music = null;
   let musicQueue = [];
+  let musicEra = null;   // vilken era queue byggdes för
+  function currentMusicTracks() {
+    return state.era === 'rome' ? ROME_MUSIC_TRACKS : EGYPT_MUSIC_TRACKS;
+  }
   function shuffleTracks() {
-    const arr = MUSIC_TRACKS.slice();
+    const arr = currentMusicTracks().slice();
     for (let i = arr.length - 1; i > 0; i--) {
       const j = Math.floor(Math.random() * (i + 1));
       [arr[i], arr[j]] = [arr[j], arr[i]];
@@ -620,11 +636,15 @@
   }
   function buildMusicQueue() {
     musicQueue = shuffleTracks();
+    musicEra = state.era;
   }
   function playNextTrack() {
     if (!audioOn.value) return;
+    // Bygg om kön om eran ändrats (t.ex. Egypt → Rome)
+    if (musicEra !== state.era) {
+      musicQueue = [];
+    }
     if (musicQueue.length === 0) {
-      // omblanda när alla låtarna spelats — och se till att den första nya inte är samma som den sista vi spelade
       const last = music && music.src ? music.src.split('/').pop() : null;
       buildMusicQueue();
       const fname = musicQueue[0].split('/').pop();
@@ -635,7 +655,7 @@
     const track = musicQueue.shift();
     if (music) { try { music.pause(); } catch(e) {} }
     music = new Audio(track);
-    music.loop = false; // viktigt: ska gå vidare till nästa
+    music.loop = false;
     music.volume = 0.35;
     music.preload = 'auto';
     music.addEventListener('ended', () => {
@@ -645,10 +665,17 @@
   }
   function startMusic() {
     if (!audioOn.value) return;
-    if (musicQueue.length === 0) buildMusicQueue();
+    if (musicQueue.length === 0 || musicEra !== state.era) buildMusicQueue();
     playNextTrack();
   }
   function stopMusic() { if (music) try { music.pause(); } catch(e) {} }
+  // Byt musik när eran skiftar (Egypt → Rome)
+  function switchMusicForEraChange() {
+    if (!audioOn.value) return;
+    musicQueue = [];
+    musicEra = null;
+    playNextTrack();
+  }
 
   // ---------- State ----------
   const state = {
@@ -660,7 +687,7 @@
     blockSettleIdx: -1,
     blockSettleTimer: 0,
     time: 0,
-    dayTime: 0.15, // 0..1, börjar tidig morgon
+    dayTime: 0.4, // 0..1, börjar tidig morgon
     whipCooldown: 0,
     cracks: [],
     floaters: [],
@@ -686,6 +713,16 @@
     cart: null,        // Rom: oxdragen sten-kärra {x, y, phase, stones, timer, walkPhase}
     deliveryPile: 0,   // Rom: stenar levererade utanför Colosseum (av kärran)
     cartDriver: null,  // Rom: referens till slaven som just nu leder kärran
+    bigBlock: null,    // Egypt: (legacy singular — behålls null; nya systemet använder bigBlocks[])
+    bigBlocks: [],     // Egypt: array av stora sten-block (flera samtidiga)
+    _bigBlockIdCounter: 0,
+    bigBlockReserve: 15,   // Egypt: totalt antal block kvar att spawna
+    stationSleds: [],  // Egypt: en släde per huggnings-station med { load, capacity, id, state, x, y }
+    stationHomePile: [0],  // Egypt: hemma-hög per station (stenar stackar här när släden är borta)
+    fallenPieces: [],  // Egypt: sågade bitar som ligger på marken, väntar på att plockas upp
+    _pieceIdCounter: 0,
+    egyptCutPile: 0,   // Egypt: fallback-hög (används inte längre men behålls för äldre save-state)
+    egyptSurplus: 0,   // Egypt: överskotts-stenar som lades nära pyramiden (blocket redan använt)
     wagons: [],       // häst-och-vagn med slav-bur som anländer mellan banor
     wagonPhase: null, // null | 'entering' | 'unloading' | 'leaving'
     wagonTimer: 0,
@@ -2969,7 +3006,11 @@
     transformIntro.pharaohSnapFacing = pharaoh.facing || 1;
     transformIntro.prevRunning = state.running;
     transformIntro.prevEra = state.era;
+    transformIntro.workersClearedForReveal = false;   // ny flagga per cutscene
     state.running = false;
+    // Pausa musiken och spela transform-jingeln
+    stopMusic();
+    playTransformSound();
     if (opts.fromDebug) {
       overlay.classList.add('hidden');
     }
@@ -2999,6 +3040,27 @@
     // Rom behöver fler händer (mixer + 2 hällare + målare + bärare + reserv)
     startLevelTransition({ level: 1, slaveCount: TOTAL_WORKERS + 5 });
     populateRomeStart();
+    // Byt musik till den romerska soundtracken
+    switchMusicForEraChange();
+  }
+
+  // Sätt upp Egypt-startläget: en släde, 15 stora block totalt (pyramiden behöver 55 stenar
+  // och varje block ger 5 = 75 stenar totalt, 20 extra som buffert)
+  function populateEgyptStart() {
+    state.bigBlock = null;
+    state.bigBlocks = [];
+    state._bigBlockIdCounter = 0;
+    state.bigBlockReserve = 25;
+    state.fallenPieces = [];
+    state._pieceIdCounter = 0;
+    // TVÅ slädar — de kan cykla oberoende, en full på pyramiden medan andra fylls hemma
+    state.stationSleds = [
+      { id: 0, load: 6, capacity: 6, state: 'at-station', x: null, y: null, destX: null, destY: null, stuckTimer: 0 },
+      { id: 1, load: 3, capacity: 6, state: 'at-station', x: null, y: null, destX: null, destY: null, stuckTimer: 0 },
+    ];
+    state.stationHomePile = [0];   // en shared hemma-hög (piece collectors levererar hit)
+    state.egyptCutPile = 0;
+    state.dayTime = 0.82;
   }
 
   // Sätt upp Rom-startläget: tomma molds + färdig stapel med 10 stenar
@@ -3016,7 +3078,47 @@
     // I Rom byggs Colosseum med 10 stenar per våning × 4 våningar = 40 totalt
     // så varje sten är visuellt lika stor som slavarnas bär-sten (PYR_BLOCK_W bred)
     state.blocksTarget = 40;
+    // KRITISKT: nollställ progress-relaterade fält så win-condition inte triggar direkt
+    state.blocksPlaced = 0;
     state.won = false;
+    state.postGame = false;
+    state.colosseumPaint = [0, 0, 0, 0];
+    state.craneBigStones = 0;
+    state.craneCycle = 0;
+    state.deliveryPile = 0;
+    state.blockSettleIdx = -1;
+    state.blockSettleTimer = 0;
+    state.scaffoldWood = 0;
+    state.cart = null;
+    state.cartDriver = null;
+    state.bigBlock = null;
+    // Ta bort alla Egypt-specifika slav-uppdrag som annars skulle spöka kvar
+    for (const w of workers) {
+      w.sledTask = false;
+      w.sledBlock = null;
+      w.sledSlot = null;
+      w.cutterTask = false;
+      w.cutterBlock = null;
+      w.sawerTask = false;
+      w.sawerBlock = null;
+      w.sawerSlot = null;
+      w.waterPourerTask = false;
+      w.waterPourerBlock = null;
+      w.pickingFromEgyptCut = false;
+      w.pickingFromSledIdx = null;
+      w.lintelTask = false;
+      w.lintelRole = null;
+      w.lintelPartner = null;
+      w.lintelPhase = null;
+      w.crankTask = false;
+      w.crankPhase = null;
+      w.woodTask = false;
+      w.woodPhase = null;
+    }
+    // Nolla Egypt-specifik state så inget hänger kvar
+    state.bigBlocks = [];
+    state.stationSleds = [];
+    state.egyptCutPile = 0;
   }
 
   function skipTransformIntro() {
@@ -3066,8 +3168,15 @@
       drawTransformPortrait(portraitCX, portraitCY, zoom, 'caesar', 1, 0);
     }
     else if (beat.name === 'zoom-out') {
-      // Rita in Rom-scenen under men UTAN spelvärldens farao — den stora Caesar-portraiten är den enda vi ser
+      // Rita in Rom-scenen under men UTAN spelvärldens farao och UTAN gamla Egypt-slavar
       state.era = 'rome';
+      // Rensa gamla workers första gången zoom-out kör så Rom-scenen fadear in tom
+      if (!transformIntro.workersClearedForReveal) {
+        workers.length = 0;
+        populateRomeStart();
+        transformIntro.workersClearedForReveal = true;
+        switchMusicForEraChange();
+      }
       draw();
       // Vignette receding
       const vign = 1 - easeOutQuad(t);
@@ -5873,11 +5982,12 @@
     { x: 1180, y: 460 },  // upper höger
     { x: 360, y: 500 },   // mellan vänster (nära quarry)
   ];
-  const TORCHES = TORCHES_LEVEL1.map(p => ({ x: p.x, y: p.y, lit: false, assignedTo: null }));
+  // Facklor tände direkt så slavarna inte behöver springa och tända när det är natt vid start
+  const TORCHES = TORCHES_LEVEL1.map(p => ({ x: p.x, y: p.y, lit: true, assignedTo: null }));
   function applyTorchLayout() {
     const src = state.level === 2 ? TORCHES_LEVEL2 : TORCHES_LEVEL1;
     TORCHES.length = 0;
-    for (const p of src) TORCHES.push({ x: p.x, y: p.y, lit: false, assignedTo: null });
+    for (const p of src) TORCHES.push({ x: p.x, y: p.y, lit: true, assignedTo: null });
   }
 
   const REST_ZONES = [
@@ -6156,6 +6266,11 @@
           else dmg = 60;                // pisk 4+: dödar
         }
         w.hp -= dmg;
+
+        // Egypt bana 1: efter pisk, tilldela direkt en akut uppgift så slaven inte står handfallen
+        if (state.era === 'egypt' && state.level === 1 && !state.postGame && !w.hp <= 0) {
+          assignUrgentEgyptTaskTo(w);
+        }
 
         if (wasLazy && !wasSleeping) {
           state.score += 5;
@@ -6567,6 +6682,27 @@
         if (handleScaffoldBuilderTask(w)) continue;
       }
 
+      // Egypt: sled-gäng som drar stort block till huggnings-station
+      if (w.sledTask) {
+        if (handleSledTask(w)) continue;
+      }
+      // Egypt: sågare (2 slavar) — pull-and-push den 4000-åriga kopparsågen
+      if (w.sawerTask) {
+        if (handleSawerTask(w)) continue;
+      }
+      // Egypt: vattenhällare — häller vatten över sågspåret (sand+vatten = slipmedel)
+      if (w.waterPourerTask) {
+        if (handleWaterPourerTask(w)) continue;
+      }
+      // Egypt: bit-plockare — går till fallen sten, lyfter, går till släden och lägger den
+      if (w.pieceCollectTask) {
+        if (handlePieceCollectTask(w)) continue;
+      }
+      // Egypt: sled-dragare — 2 slavar drar en full släde till pyramiden (eller tom tillbaka)
+      if (w.sledDragTask) {
+        if (handleSledDragTask(w)) continue;
+      }
+
       // Fly-försök — springer mot vänster kant tills timern rinner ut (fångas) eller når kanten
       if (w.escaping) {
         w.escapeTimer--;
@@ -6667,11 +6803,42 @@
       if (distP < 90 && !inDeepSleep) w.energy = Math.min(100, w.energy + 0.15);
 
       if (w.energy <= 5 && w.state !== 'lazy') {
-        // Om de bär en sten — släpp den där de står (som en ny extra-sten på marken)
+        // Om de bär en sten — släpp den där de står så den inte försvinner
         if (w.carrying && state.era === 'rome' && !w.lintelTask) {
           state.extraStones = Math.min(60, (state.extraStones || 0) + 1);
           spawnFloater(w.x, w.y - 20, '+I', '#e8dcc4');
         }
+        if (w.carrying && state.era === 'egypt' && state.level === 1 && !w.lintelTask) {
+          // Nära pyramiden → dumpa som surplus (bygg-buffert bredvid pyramiden).
+          // Nära stationen → som fallen piece redo för piece-collector.
+          const pyramidLeftX = PYR_BASE_X - PYR_ROWS * PYR_BLOCK_W / 2 - 40;
+          const nearPyramid = w.x > pyramidLeftX - 40;
+          if (nearPyramid) {
+            state.egyptSurplus = Math.min(30, (state.egyptSurplus || 0) + 1);
+            const surplusPos = egyptSurplusPilePos();
+            spawnFloater(surplusPos.x, surplusPos.y - 12, '+I', '#d8b070');
+          } else {
+            if (!state.fallenPieces) state.fallenPieces = [];
+            state.fallenPieces.push({
+              id: ++state._pieceIdCounter,
+              x: w.x, y: w.y, vx: 0, vy: 0,
+              resting: true, targetY: w.y,
+              stationIdx: 0, claimedBy: null,
+            });
+            spawnFloater(w.x, w.y - 20, '+I', '#d8b070');
+          }
+        }
+        // Rensa piece-collector-task så piece.claimedBy inte spöka kvar
+        if (w.pieceCollectTask) {
+          if (w.pieceCollectTask.claimedBy === w) w.pieceCollectTask.claimedBy = null;
+          w.pieceCollectTask = null;
+          w.pieceCollectPhase = null;
+          w.pieceCollectStation = null;
+        }
+        w.pickingFromSledIdx = null;
+        w.pickingFromHomePile = null;
+        w.pickingFromSurplus = false;
+        w.reservedSlotIdx = null;
         w.state = 'lazy';
         pickLazyBehavior(w);
         w.target = null;
@@ -7140,6 +7307,33 @@
           if (w.pickupTimer > 0) {
             w.pickupTimer--;
             if (w.pickupTimer === 0) {
+              // Validera att sled fortfarande är där den ska vara (kan ha flyttats mellan
+              // task-val och pickup-slut). Om inte → avbryt utan att sätta carrying=true
+              let validPickup = true;
+              if (w.pickingFromSledIdx != null) {
+                const sled = state.stationSleds && state.stationSleds[w.pickingFromSledIdx];
+                if (!sled || sled.state !== 'at-pyramid' || sled.load <= 0) {
+                  // Släden har åkt iväg eller är tom — avbryt pickup
+                  validPickup = false;
+                }
+              }
+              if (w.pickingFromHomePile != null) {
+                const idx = w.pickingFromHomePile;
+                if (!state.stationHomePile || (state.stationHomePile[idx] || 0) <= 0) {
+                  validPickup = false;
+                }
+              }
+              if (w.pickingFromSurplus) {
+                if ((state.egyptSurplus || 0) <= 0) validPickup = false;
+              }
+              if (!validPickup) {
+                w.pickingFromSledIdx = null;
+                w.pickingFromHomePile = null;
+                w.pickingFromSurplus = false;
+                w.target = null;
+                w.pickupTimer = 0;
+                // Ingen sten plockad — fortsätt till nästa frame
+              } else {
               w.carrying = true;
               w.target = null;
               // Om vi plockade upp från en gjutform, töm den
@@ -7158,6 +7352,34 @@
                 state.deliveryPile = Math.max(0, (state.deliveryPile || 0) - 1);
                 w.pickingFromDelivery = false;
               }
+              // Om vi plockade från egyptiska cut-högen (legacy fallback)
+              if (w.pickingFromEgyptCut) {
+                state.egyptCutPile = Math.max(0, (state.egyptCutPile || 0) - 1);
+                w.pickingFromEgyptCut = false;
+              }
+              // Om vi plockade från en stations-släde
+              if (w.pickingFromSledIdx != null) {
+                const sled = state.stationSleds && state.stationSleds[w.pickingFromSledIdx];
+                if (sled) sled.load = Math.max(0, sled.load - 1);
+                w.pickingFromSledIdx = null;
+              }
+              // Om vi plockade från hemma-högen (sled var borta)
+              if (w.pickingFromHomePile != null) {
+                const idx = w.pickingFromHomePile;
+                if (state.stationHomePile) {
+                  state.stationHomePile[idx] = Math.max(0, (state.stationHomePile[idx] || 0) - 1);
+                }
+                w.pickingFromHomePile = null;
+              }
+              // Om vi plockade från surplus-högen vid pyramiden
+              if (w.pickingFromSurplus) {
+                state.egyptSurplus = Math.max(0, (state.egyptSurplus || 0) - 1);
+                w.pickingFromSurplus = false;
+              }
+              // Reservera en pyramid-slot direkt så bäraren inte re-targetar under promenaden
+              if (state.era === 'egypt' && state.level === 1 && !w.lintelTask && !w.woodTask) {
+                w.reservedSlotIdx = reserveNextPyramidSlot(w);
+              }
               // damm-partiklar när stenen lyfts
               const dustColor = state.era === 'rome' ? '#dcd0b8' : '#c89870';
               for (let i = 0; i < 5; i++) {
@@ -7171,6 +7393,7 @@
                   grav: 0.1,
                 });
               }
+              }   // stänger else av validPickup
             }
           } else {
             // Välj uppgift — lintel (2-pers), sten, eller trä
@@ -7249,6 +7472,72 @@
                   const pile = stonePileCenter();
                   w.target = { x: pile.x, y: pile.y + 8 };
                 }
+              } else if (state.era === 'egypt' && state.level === 1) {
+                const carriersEnRoute = workers.filter(o =>
+                  o.carrying && !o.lintelTask && !o.woodTask &&
+                  !o.pieceCollectTask && o.pickingFromHomePile == null
+                ).length;
+                const pyrCap = state.blocksTarget || 55;
+                // Vänta med att plocka nya stenar när det är dags för lintel — bara lintel-gänget jobbar
+                const waitingForLintel = state.blocksPlaced === 30;
+                const pyramidNeedsMore = state.blocksPlaced + carriersEnRoute < pyrCap
+                                       && (!waitingForLintel || w.lintelTask);
+                // Samla alla möjliga plockplatser med tillgänglig last
+                const candidates = [];
+                if (pyramidNeedsMore) {
+                  for (let si = 0; si < (state.stationSleds || []).length; si++) {
+                    const sled = state.stationSleds[si];
+                    if (!sled || sled.state !== 'at-pyramid') continue;
+                    const reserved = workers.filter(o => o.pickingFromSledIdx === si).length;
+                    if (sled.load - reserved <= 0) continue;
+                    const sp = stationSledPickupPos(si);
+                    candidates.push({ type: 'sled', idx: si, x: sp.x, y: sp.y + 6 });
+                  }
+                  if ((state.egyptSurplus || 0) > 0) {
+                    const reservedSurplus = workers.filter(o => o.pickingFromSurplus).length;
+                    if ((state.egyptSurplus || 0) - reservedSurplus > 0) {
+                      const sp = egyptSurplusPilePos();
+                      candidates.push({ type: 'surplus', x: sp.x, y: sp.y + 6 });
+                    }
+                  }
+                }
+                // Välj NÄRMASTE
+                let best = null, bestD = Infinity;
+                for (const c of candidates) {
+                  const d = Math.hypot(w.x - c.x, w.y - c.y);
+                  if (d < bestD) { bestD = d; best = c; }
+                }
+                if (best && best.type === 'sled') {
+                  w.pickingFromSledIdx = best.idx;
+                  w.target = { x: best.x, y: best.y };
+                } else if (best && best.type === 'surplus') {
+                  w.pickingFromSurplus = true;
+                  w.target = { x: best.x, y: best.y };
+                } else {
+                  // RARE fallback: sled saknar-eller-fastnat och hemma-högen är väldigt stor.
+                  // Bara då går bärare hela vägen till stationen själv.
+                  let starving = false;
+                  for (let si = 0; si < (state.stationHomePile || []).length; si++) {
+                    if ((state.stationHomePile[si] || 0) >= 12) { starving = true; break; }
+                  }
+                  if (starving) {
+                    for (let si = 0; si < (state.stationHomePile || []).length; si++) {
+                      const homeLoad = state.stationHomePile[si] || 0;
+                      const reserved = workers.filter(o => o.pickingFromHomePile === si).length;
+                      if (homeLoad - reserved > 0) {
+                        w.pickingFromHomePile = si;
+                        const hp = stationHomePilePos(si);
+                        w.target = { x: hp.x, y: hp.y + 6 };
+                        break;
+                      }
+                    }
+                  } else if ((state.egyptCutPile || 0) > 0) {
+                    w.pickingFromEgyptCut = true;
+                    const cp = egyptCutPilePos();
+                    w.target = { x: cp.x, y: cp.y + 8 };
+                  }
+                  // Annars: idle (väntar på att släden ska komma till pyramiden)
+                }
               } else {
                 const baseY = quarry.y + quarry.h - 2;
                 w.target = {
@@ -7318,17 +7607,23 @@
             }
             continue;   // fortsätt gå mot kranen tills framme
           }
-          // Block 30 = lintel — kräver 2-pers-par. Vanliga bärare siktar
-          // redan på block 31:s position så de rör sig framåt istället för att stå still.
+          // Använd reservedSlotIdx om satt, annars falla tillbaka till nästa i ordningen
+          const reservedIdx = w.reservedSlotIdx;
           const waitingForLintel = state.blocksPlaced === 30;
-          const targetIdx = waitingForLintel ? 31 : state.blocksPlaced;
+          const targetIdx = state.era === 'egypt' && state.level === 1 && reservedIdx != null
+            ? reservedIdx
+            : (waitingForLintel ? 31 : state.blocksPlaced);
           const next = pyramidBlockPos(targetIdx);
           if (!next) {
-            // Colosseum är fullbyggt — stapla överskotts-stenen vid quarryn
             w.carrying = false;
+            w.reservedSlotIdx = null;
             if (state.era === 'rome') {
               state.extraStones = Math.min(20, (state.extraStones || 0) + 1);
               spawnFloater(quarry.x + quarry.w/2, quarry.y - 12, '+I', '#e8dcc4');
+            } else if (state.era === 'egypt') {
+              state.egyptSurplus = Math.min(30, (state.egyptSurplus || 0) + 1);
+              const surplusPos = egyptSurplusPilePos();
+              spawnFloater(surplusPos.x, surplusPos.y - 12, '+I', '#d8b070');
             }
             continue;
           }
@@ -7336,10 +7631,22 @@
           const ty = next.y + 10;
           moveWorkerToward(w, tx, ty);
           if (dist2(w.x, w.y, tx, ty) < 14) {
-            if (waitingForLintel) continue;   // vänta med att placera tills lintelen är på plats
+            // Egypt bana 1: om det inte är MIN tur (reservedSlot > blocksPlaced), släpp som surplus
+            // och gå iväg — vänta INTE. Slaven kan komma tillbaka och plocka från surplus senare.
+            if (state.era === 'egypt' && state.level === 1 && targetIdx !== state.blocksPlaced) {
+              // Fel slot just nu — droppa som surplus intill pyramiden
+              state.egyptSurplus = Math.min(30, (state.egyptSurplus || 0) + 1);
+              const surplusPos = egyptSurplusPilePos();
+              spawnFloater(surplusPos.x, surplusPos.y - 12, '+I', '#d8b070');
+              w.carrying = false;
+              w.reservedSlotIdx = null;
+              continue;
+            }
+            if (waitingForLintel) continue;
             state.blocksPlaced++;
             state.score += 10;
             w.carrying = false;
+            w.reservedSlotIdx = null;
             spawnFloater(next.x, next.y - 10, '+1', '#fff0a0');
             // Marmordamm när sten sätts på plats i Rom (vitt puder + partiklar)
             if (state.era === 'rome') {
@@ -7440,12 +7747,25 @@
     assignCartDriver();
     assignCartLoader();
     assignScaffoldBuilders();
+    // Egypt bana 1 task-prio: 1. såga  2. fyll släden  3. dra släden  4. bär (fallback)
+    // Väck slöa slavar först om det finns akuta uppgifter
+    forceWakeForUrgentEgyptTasks();
+    // 1. Såga
+    assignSawers();
+    assignWaterPourer();
+    // 2. Fylla släden (piece collector) — hämtar sågade bitar från marken
+    assignPieceCollector();
+    // 3. Dra släden till/från pyramiden
+    assignSledDragGang();
+    // Också: dra stora block från quarry till station
+    assignSledGang();
     updateLevelTransition();
     updateMolds();
     updateColosseumPaint();
     updateCraneCycle();
     updateCart();
     updatePigeons();
+    updateBigBlock();
     updateRomeEvents();
     updateWhipHelper();
 
@@ -8163,6 +8483,1581 @@
       return true;
     }
     return false;
+  }
+
+  // ---------- Egypt: stora quarry-block släpas till huggnings-station ----------
+  // Spawn-positioner för de stora blocken i quarryn — staplad pile-formation (10 synliga)
+  function bigBlockQuarryPos(slot) {
+    const baseX = quarry.x + 40;
+    const baseY = quarry.y + quarry.h - 22;
+    const offsets = [
+      // Bottom row — 3 block
+      { dx: 0,   dy: 0 },
+      { dx: 65,  dy: -2 },
+      { dx: 130, dy: -3 },
+      // Top — 1 block ovanpå
+      { dx: 65,  dy: -22 },
+    ];
+    const o = offsets[slot % offsets.length];
+    return { x: baseX + o.dx, y: baseY + o.dy };
+  }
+  // EN sten-station (idx alltid 0 — flera var för grötigt)
+  function cuttingStationPos(idx) {
+    return { x: quarry.x + quarry.w + 90, y: quarry.y + quarry.h - 4 };
+  }
+  function sledSlotPos(slot, block) {
+    // Fyra slot-positioner runt släden — slavarna står till höger om blocket och drar
+    const dx = 18, dy = 8;
+    switch (slot) {
+      case 0: return { x: block.x + 22 + dx * 0, y: block.y - dy };
+      case 1: return { x: block.x + 22 + dx * 0, y: block.y + dy };
+      case 2: return { x: block.x + 22 + dx * 1.4, y: block.y - dy };
+      case 3: return { x: block.x + 22 + dx * 1.4, y: block.y + dy };
+    }
+    return { x: block.x + 30, y: block.y };
+  }
+  // Cut-linjen för ett specifikt block (seamen mellan LEFTMOST biten och resten)
+  function bigBlockCutX(bb) {
+    if (!bb) return 0;
+    const leftEdge = bb.x - bb.stonesLeft * PYR_BLOCK_W / 2;
+    return leftEdge + PYR_BLOCK_W;
+  }
+  // Sågaren står precis till VÄNSTER om blockets cut
+  function sawerSlotPos(bb) {
+    if (!bb) return { x: 0, y: 0 };
+    return { x: bigBlockCutX(bb) - 3, y: bb.y + 4 };
+  }
+  // Vattenhällaren står precis till HÖGER om blockets cut
+  function waterPourerSlotPos(bb) {
+    if (!bb) return { x: 0, y: 0 };
+    return { x: bigBlockCutX(bb) + 7, y: bb.y + 4 };
+  }
+  // Legacy: gamla cut-hög-läget (används bara som fallback för äldre spar-läge)
+  function egyptCutPilePos() {
+    const p = cuttingStationPos(0);
+    return { x: p.x + 60, y: p.y + 8 };
+  }
+  // Släde-position — returnerar aktuellt läge (dynamiskt när släden dras)
+  function stationSledPos(idx) {
+    const sled = state.stationSleds && state.stationSleds[idx];
+    if (sled && sled.x != null) return { x: sled.x, y: sled.y };
+    return stationSledHomePos(idx);
+  }
+  // Slädens hem-position (vid stenstationen) — 2 slädar offset från varandra
+  function stationSledHomePos(idx) {
+    const p = cuttingStationPos(0);
+    // Släde 0: bakom (upp-höger), släde 1: framför (ner-vänster) — så båda syns
+    if (idx === 1) return { x: p.x + 90, y: p.y + 34 };
+    return { x: p.x + 105, y: p.y + 12 };
+  }
+  // Hemma-högen: mellan de två slädarna
+  function stationHomePilePos(idx) {
+    const home = stationSledHomePos(0);
+    return { x: home.x + 42, y: home.y + 6 };
+  }
+  // Slädens destination vid pyramiden — 2 slädar offset
+  function stationSledPyramidPos(idx) {
+    const baseX = PYR_BASE_X - PYR_ROWS * PYR_BLOCK_W / 2 - 60;
+    const baseY = PYR_BASE_Y - 10;
+    if (idx === 1) return { x: baseX - 12, y: baseY + 26 };
+    return { x: baseX, y: baseY };
+  }
+  // Sled-plockposition för bärare (dit de går för att hämta en färdig sten)
+  function stationSledPickupPos(idx) {
+    const s = stationSledPos(idx);
+    return { x: s.x - 12, y: s.y + 4 };
+  }
+  // Drag-position för 2-3 slavar: slot 0/1 framför (drar med rep), slot 2 BAKOM (puttar)
+  function sledDraggerSlotPos(slot, sled) {
+    const homeX = stationSledHomePos(sled.id).x;
+    const pyrX = stationSledPyramidPos(sled.id).x;
+    let dir = 1;
+    if (sled.state === 'dragging-back' || sled.state === 'awaiting-return') dir = -1;
+    else if (sled.state === 'dragging-out' || sled.state === 'awaiting-drag') dir = pyrX > homeX ? 1 : -1;
+    if (slot === 2) {
+      // Puttar från BAKSIDAN (motsatt färdriktning)
+      return { x: sled.x - 30 * dir, y: sled.y };
+    }
+    const forwardX = 30 * dir;
+    return { x: sled.x + forwardX, y: sled.y + (slot === 0 ? -6 : 6) };
+  }
+  // Läge för surplus-högen (nära pyramidens fot) — där bärare släpper stenar när pyramiden är full
+  function egyptSurplusPilePos() {
+    return { x: PYR_BASE_X - PYR_ROWS * PYR_BLOCK_W / 2 - 40, y: PYR_BASE_Y - 6 };
+  }
+
+  // Vid varje frame: spawna nya block från reserven om det finns lediga quarry-slots
+  function ensureBigBlocksInitialized() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    if (!state.bigBlocks) state.bigBlocks = [];
+    if (state.bigBlockReserve == null) state.bigBlockReserve = 15;
+    if (!state.stationSleds || state.stationSleds.length === 0) {
+      state.stationSleds = [ {
+        id: 0, load: 0, capacity: 6,
+        state: 'at-station', x: null, y: null, destX: null, destY: null,
+      } ];
+    }
+    for (const sled of state.stationSleds) {
+      if (sled.x == null) {
+        // Positionera baserat på nuvarande state (så en sled som börjar at-pyramid syns där direkt)
+        const p = sled.state === 'at-pyramid'
+          ? stationSledPyramidPos(sled.id)
+          : stationSledHomePos(sled.id);
+        sled.x = p.x; sled.y = p.y;
+      }
+      if (sled.state == null) sled.state = 'at-station';
+    }
+    // Räkna in-quarry block per slot
+    const inQuarryBlocks = state.bigBlocks.filter(b =>
+      b.state === 'in-quarry' || b.state === 'gathering');
+    const occupied = new Set(inQuarryBlocks.map(b => b.quarrySlot));
+    const MAX_QUARRY_SLOTS = 4;   // Visa 4 block synligt (25 totalt, resten spawnar från reserv)
+    // Fyll lediga slots från reserven
+    for (let slot = 0; slot < MAX_QUARRY_SLOTS && state.bigBlockReserve > 0; slot++) {
+      if (occupied.has(slot)) continue;
+      state.bigBlockReserve--;
+      const p = bigBlockQuarryPos(slot);
+      state.bigBlocks.push({
+        id: ++state._bigBlockIdCounter,
+        state: 'in-quarry',
+        x: p.x, y: p.y,
+        quarrySlot: slot,
+        stationIdx: null,
+        stonesLeft: 5,
+        totalPieces: 5,
+        cutTimer: 0,
+        cutDepth: 0,
+        spawnDelay: 0,
+      });
+      occupied.add(slot);
+    }
+  }
+
+  // Hitta en ledig station (bara 1 station, station 0).
+  // ETT block åt gången får stationIdx=0 — så bara en sled-gang kan bilda sig i taget.
+  function pickFreeStationForBlock() {
+    const occupied = state.bigBlocks.some(b => b.stationIdx === 0);
+    return occupied ? null : 0;
+  }
+
+  function updateBigBlocks() {
+    if (state.era !== 'egypt' || state.level !== 1) {
+      state.bigBlocks = [];
+      state.fallenPieces = [];
+      return;
+    }
+    ensureBigBlocksInitialized();
+    for (const bb of state.bigBlocks) updateOneBigBlock(bb);
+    // Rensa bort block markerade som klara — reserven fyller inte upp längre
+    if (state.bigBlocks.some(b => b.remove)) {
+      state.bigBlocks = state.bigBlocks.filter(b => !b.remove);
+    }
+    updateFallenPieces();
+    updateSleds();
+  }
+
+  // Släden har en egen livscykel: vid station → full → dras till pyramid → tömd → dras tillbaka
+  function updateSleds() {
+    if (!state.stationSleds) return;
+    for (const sled of state.stationSleds) updateOneSled(sled);
+  }
+
+  function updateOneSled(sled) {
+    // När släden är HEMMA: dra stenar från hemma-högen upp på släden
+    if (sled.state === 'at-station' && sled.load < sled.capacity) {
+      // Shared home pile — bara idx 0 räknas
+      const homePile = state.stationHomePile[0] || 0;
+      if (homePile > 0) {
+        const take = Math.min(homePile, sled.capacity - sled.load);
+        sled.load += take;
+        state.stationHomePile[0] = homePile - take;
+      }
+    }
+    // Auto-transitioner
+    if (sled.state === 'at-station' && sled.load >= sled.capacity) {
+      sled.state = 'awaiting-drag';
+      const dest = stationSledPyramidPos(sled.id);
+      sled.destX = dest.x; sled.destY = dest.y;
+    }
+    // PARTIAL DRAG: släden har minst 3 stenar, pyramiden är starving och inga fler stenar på gång.
+    // Slavarna "känner för det" (låg sannolikhet per frame så det sker naturligt över tid)
+    if (sled.state === 'at-station' && sled.load >= 3 && sled.load < sled.capacity) {
+      const otherActive = (state.stationSleds || []).some(s =>
+        s !== sled && (
+          (s.state === 'at-pyramid' && s.load > 0) ||
+          s.state === 'awaiting-drag' ||
+          s.state === 'dragging-out'
+        )
+      );
+      const homePileEmpty = ((state.stationHomePile || [])[0] || 0) === 0;
+      const anyFallenPieces = (state.fallenPieces || []).some(p => p.stationIdx === 0);
+      const noStonesComing = homePileEmpty && !anyFallenPieces;
+      if (!otherActive && noStonesComing) {
+        // "Känner för det" — 0.5% chans per frame ≈ trigger inom några sekunder
+        if (Math.random() < 0.005) {
+          sled.state = 'awaiting-drag';
+          const dest = stationSledPyramidPos(sled.id);
+          sled.destX = dest.x; sled.destY = dest.y;
+        }
+      }
+    }
+    if (sled.state === 'at-pyramid' && sled.load <= 0) {
+      sled.state = 'awaiting-return';
+      const home = stationSledHomePos(sled.id);
+      sled.destX = home.x; sled.destY = home.y;
+    }
+    // Vänta på minst 2 slavar (3 gör det snabbare)
+    if (sled.state === 'awaiting-drag' || sled.state === 'awaiting-return') {
+      sled.stuckTimer = (sled.stuckTimer || 0) + 1;
+      const draggers = workers.filter(w => w.sledDragTask && w.sledDragSled === sled);
+      const requiredInPlace = Math.min(draggers.length, 2);
+      let inPlace = 0;
+      for (const w of draggers) {
+        const slot = sledDraggerSlotPos(w.sledDragSlot || 0, sled);
+        if (Math.hypot(w.x - slot.x, w.y - slot.y) <= 8) inPlace++;
+      }
+      if (draggers.length >= 2 && inPlace >= 2) {
+        sled.state = sled.state === 'awaiting-drag' ? 'dragging-out' : 'dragging-back';
+        sled.stuckTimer = 0;
+      }
+    } else {
+      sled.stuckTimer = 0;
+    }
+    // Dragande — flytta släden och slavarna synkroniserat
+    if (sled.state === 'dragging-out' || sled.state === 'dragging-back') {
+      const dx = sled.destX - sled.x, dy = sled.destY - sled.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 4) {
+        const draggerCount = workers.filter(w => w.sledDragTask && w.sledDragSled === sled).length;
+        const speed = draggerCount >= 3 ? 0.58 : 0.42;   // 3 slavar = snabbare
+        sled.x += (dx / d) * speed;
+        sled.y += (dy / d) * speed;
+        const draggers = workers.filter(w => w.sledDragTask && w.sledDragSled === sled);
+        for (const w of draggers) {
+          const slot = sledDraggerSlotPos(w.sledDragSlot || 0, sled);
+          const wdx = slot.x - w.x, wdy = slot.y - w.y;
+          const wd = Math.hypot(wdx, wdy);
+          if (wd > 1) {
+            w.x += (wdx / wd) * speed * 1.1;
+            w.y += (wdy / wd) * speed * 1.1;
+            w.walkPhase += 0.14;
+            w.facing = dx > 0 ? 1 : -1;
+          }
+        }
+      } else {
+        sled.x = sled.destX; sled.y = sled.destY;
+        sled.state = sled.state === 'dragging-out' ? 'at-pyramid' : 'at-station';
+        // Släpp drag-gänget och tilldela direkt en ny uppgift
+        const draggers = workers.filter(w => w.sledDragTask && w.sledDragSled === sled);
+        for (const w of draggers) {
+          w.sledDragTask = false; w.sledDragSled = null; w.sledDragSlot = null;
+          w.target = null;
+          assignUrgentEgyptTaskTo(w);
+        }
+      }
+    }
+  }
+
+  // Efter pisk/task-release: ge slaven direkt en akut Egypt-uppgift
+  function assignUrgentEgyptTaskTo(w) {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    if (w.carrying || w.bearerOf || w.torchTask || w.woodTask || w.lintelTask) return;
+    if (w.sledTask || w.sawerTask || w.waterPourerTask || w.sledDragTask || w.pieceCollectTask) return;
+    // Kolla om pyramiden är fullbyggd + tillräckligt med bärare på väg
+    const carriersEnRoute = workers.filter(o =>
+      o.carrying && !o.lintelTask && !o.woodTask &&
+      !o.pieceCollectTask && o.pickingFromHomePile == null
+    ).length;
+    const pyrCap = state.blocksTarget || 55;
+    const pyramidNeedsMore = state.blocksPlaced + carriersEnRoute < pyrCap;
+    // PRIO 1: sled vid pyramiden behöver tömmas — högsta prio (bygga pyramiden)
+    if (pyramidNeedsMore) {
+      for (const sled of state.stationSleds || []) {
+        if (sled.state !== 'at-pyramid' || sled.load <= 0) continue;
+        const reserved = workers.filter(o => o.pickingFromSledIdx === sled.id).length;
+        if (sled.load - reserved <= 0) continue;
+        w.pickingFromSledIdx = sled.id;
+        const sp = stationSledPickupPos(sled.id);
+        w.target = { x: sp.x, y: sp.y + 6 };
+        return;
+      }
+    }
+    // PRIO 2: sled behöver dras (håll flödet igång)
+    for (const sled of state.stationSleds || []) {
+      if (sled.state !== 'awaiting-drag' && sled.state !== 'awaiting-return') continue;
+      const active = workers.filter(o => o.sledDragTask && o.sledDragSled === sled);
+      if (active.length >= 3) continue;
+      const usedSlots = new Set(active.map(o => o.sledDragSlot || 0));
+      let freeSlot = -1;
+      for (let i = 0; i < 3; i++) { if (!usedSlots.has(i)) { freeSlot = i; break; } }
+      if (freeSlot < 0) continue;
+      w.sledDragTask = true;
+      w.sledDragSled = sled;
+      w.sledDragSlot = freeSlot;
+      w.target = null;
+      return;
+    }
+    // PRIO 3: fallen piece väntar på att lastas
+    const piece = (state.fallenPieces || []).find(p => p.resting && !p.claimedBy);
+    if (piece) {
+      w.pieceCollectTask = piece;
+      w.pieceCollectPhase = 'fetch';
+      w.pieceCollectStation = piece.stationIdx;
+      piece.claimedBy = w;
+      w.target = null;
+      return;
+    }
+    // PRIO 4: block behöver dras från quarry (låg prio — bara 1 åt gången)
+    for (const bb of state.bigBlocks || []) {
+      if (bb.state !== 'in-quarry' && bb.state !== 'gathering') continue;
+      if (bb.stationIdx == null) continue;
+      const active = workers.filter(o => o.sledTask && o.sledBlock === bb);
+      if (active.length >= 4) continue;
+      const usedSlots = new Set(active.map(o => o.sledSlot || 0));
+      let freeSlot = -1;
+      for (let i = 0; i < 4; i++) { if (!usedSlots.has(i)) { freeSlot = i; break; } }
+      if (freeSlot < 0) continue;
+      w.sledTask = true;
+      w.sledBlock = bb;
+      w.sledSlot = freeSlot;
+      w.target = null;
+      return;
+    }
+    // Fallback: promenera mot stations-området
+    const p = stationSledHomePos(0);
+    w.target = { x: p.x + (Math.random()-0.5)*10, y: p.y + 4 };
+  }
+
+  // Räkna hur många akuta Egypt-slots som behöver arbetare just nu
+  function countUrgentEgyptSlots() {
+    if (state.era !== 'egypt' || state.level !== 1) return 0;
+    let n = 0;
+    for (const sled of state.stationSleds || []) {
+      // Släden vid pyramiden behöver tömmas
+      if (sled.state === 'at-pyramid' && sled.load > 0) {
+        const reserved = workers.filter(w => w.pickingFromSledIdx === sled.id).length;
+        n += Math.max(0, sled.load - reserved);
+      }
+      // Släden väntar på att dras (2 slavar behövs)
+      if (sled.state === 'awaiting-drag' || sled.state === 'awaiting-return') {
+        const active = workers.filter(w => w.sledDragTask && w.sledDragSled === sled).length;
+        n += Math.max(0, 2 - active);
+      }
+    }
+    // Fallna bitar som väntar på pickup
+    const restingUnclaimed = (state.fallenPieces || []).filter(p => p.resting && !p.claimedBy).length;
+    n += restingUnclaimed;
+    return n;
+  }
+
+  // Väck slöa slavar när det finns akut arbete
+  function forceWakeForUrgentEgyptTasks() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    const urgent = countUrgentEgyptSlots();
+    if (urgent <= 0) return;
+    // Räkna tillgängliga (idle, ledig) slavar som redan kan hoppa på
+    const alreadyAvailable = workers.filter(w =>
+      w.state === 'idle' && !w.enteringFrom && !w.carrying &&
+      !w.torchTask && !w.bearerOf && !w.woodTask && !w.lintelTask &&
+      !w.crankTask && !w.sledTask && !w.cutterTask && !w.sledDragTask &&
+      !w.sawerTask && !w.waterPourerTask && !w.pieceCollectTask &&
+      (w.pickupTimer || 0) === 0 &&
+      w.scared < 0.7
+    ).length;
+    const stillNeeded = urgent - alreadyAvailable;
+    if (stillNeeded <= 0) return;
+    // Väck slöa slavar (även de som ligger och sover)
+    const lazySlaves = workers.filter(w =>
+      w.state === 'lazy' &&
+      !w.torchTask && !w.bearerOf && !w.carrying &&
+      w.hp > 20
+    );
+    const toWake = lazySlaves.slice(0, stillNeeded);
+    for (const w of toWake) {
+      w.state = 'idle';
+      w.lazyAction = null;
+      w.lazyTimer = 0;
+      w.atRestZone = false;
+      w.restZone = null;
+      w.restSpot = null;
+      w.energy = Math.max(w.energy, 40);
+      w.wakeBoost = 120;
+      w.target = null;
+      // Liten "kallelse-stjärna" så det syns att de vaknade
+      spawnFloater(w.x, w.y - 22, '𓊪!', '#ffe070');
+    }
+  }
+
+  function assignSledDragGang() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    if (!state.stationSleds) return;
+    // Sortera slädarna: awaiting-return FÖRST (töm ner släden så den kan hämta ny last),
+    // sedan awaiting-drag. Detta så full sled@pyramid inte blir kvar
+    const orderedSleds = [...state.stationSleds].sort((a, b) => {
+      const prioA = a.state === 'awaiting-return' ? 0 : a.state === 'awaiting-drag' ? 1 : 2;
+      const prioB = b.state === 'awaiting-return' ? 0 : b.state === 'awaiting-drag' ? 1 : 2;
+      return prioA - prioB;
+    });
+    for (const sled of orderedSleds) {
+      const isMoving = sled.state === 'dragging-out' || sled.state === 'dragging-back';
+      const isPending = sled.state === 'awaiting-drag' || sled.state === 'awaiting-return';
+      if (!isPending && !isMoving) continue;
+      const active = workers.filter(w => w.sledDragTask && w.sledDragSled === sled);
+      const maxSlaves = 3;
+      // När släden redan rör sig: bara rekrytera om vi har < 2 (skulle vara buggigt läge)
+      // När pending: rekrytera upp till 3 (2 krävs, 3:e är bonus)
+      const needMore = isPending ? active.length < maxSlaves : active.length < 2;
+      if (!needMore) continue;
+      const usedSlots = new Set(active.map(w => w.sledDragSlot || 0));
+      let freeSlot = -1;
+      for (let i = 0; i < maxSlaves; i++) { if (!usedSlots.has(i)) { freeSlot = i; break; } }
+      if (freeSlot < 0) continue;
+      // Escalation-nivå baserat på hur länge släden varit fast
+      // 0-2s: bara helt lediga slavar
+      // 2-4s: också piece collectors + water pourer
+      // 4s+: också sawer och sled-gang (block-drag)
+      const stuck = sled.stuckTimer || 0;
+      const escalation = stuck > 240 ? 3 : (stuck > 120 ? 2 : 1);
+      const baseFilter = w =>
+        w.state !== 'downed' && w.state !== 'falling' && w.state !== 'escaping' &&
+        !w.enteringFrom && !w.carrying &&
+        !w.torchTask && !w.woodTask && !w.lintelTask &&
+        !w.crankTask && !w.cutterTask && !w.sledDragTask &&
+        (w.pickupTimer || 0) === 0 &&
+        w.scared < 0.7;
+      let eligible = workers.filter(w =>
+        baseFilter(w) &&
+        !w.sledTask && !w.sawerTask && !w.waterPourerTask && !w.pieceCollectTask
+      );
+      // Level 2: också piece collectors (som inte bär) + water pourer
+      if (eligible.length === 0 && escalation >= 2) {
+        eligible = workers.filter(w =>
+          baseFilter(w) &&
+          !w.sledTask && !w.sawerTask &&
+          (!w.pieceCollectTask || w.pieceCollectPhase === 'fetch')
+        );
+      }
+      // Level 3: också sågare och sled-gang (block-drag)
+      if (eligible.length === 0 && escalation >= 3) {
+        eligible = workers.filter(w => baseFilter(w));
+      }
+      if (eligible.length === 0) continue;
+      const slotPos = sledDraggerSlotPos(freeSlot, sled);
+      let best = eligible[0], bestD = Infinity;
+      for (const w of eligible) {
+        const d = Math.hypot(w.x - slotPos.x, w.y - slotPos.y);
+        if (d < bestD) { bestD = d; best = w; }
+      }
+      // Rensa gamla tasks fullständigt när vi tvångs-omdirigerar
+      if (best.pieceCollectTask) {
+        if (best.pieceCollectTask.claimedBy === best) best.pieceCollectTask.claimedBy = null;
+        best.pieceCollectTask = null; best.pieceCollectPhase = null; best.pieceCollectStation = null;
+      }
+      if (best.sawerTask) { best.sawerTask = false; best.sawerBlock = null; best.sawerSlot = null; }
+      if (best.waterPourerTask) { best.waterPourerTask = false; best.waterPourerBlock = null; }
+      if (best.sledTask) { best.sledTask = false; best.sledBlock = null; best.sledSlot = null; }
+      best.sledDragTask = true;
+      best.sledDragSled = sled;
+      best.sledDragSlot = freeSlot;
+      best.target = null;
+      best.atRestZone = false;
+      best.restZone = null;
+      best.restSpot = null;
+      best.lazyAction = null;
+      best.lazyTimer = 0;
+    }
+  }
+
+  function handleSledDragTask(w) {
+    if (state.era !== 'egypt' || !w.sledDragSled) {
+      w.sledDragTask = false; w.sledDragSled = null; w.sledDragSlot = null;
+      return false;
+    }
+    const sled = w.sledDragSled;
+    if (sled.state === 'dragging-out' || sled.state === 'dragging-back') {
+      // Rörelsen hanteras i updateOneSled
+      return true;
+    }
+    if (sled.state === 'at-station' || sled.state === 'at-pyramid') {
+      w.sledDragTask = false; w.sledDragSled = null; w.sledDragSlot = null;
+      return false;
+    }
+    // Går till drag-slotten
+    const slot = sledDraggerSlotPos(w.sledDragSlot || 0, sled);
+    const dx = slot.x - w.x, dy = slot.y - w.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 3) {
+      const speed = 1.3;
+      w.x += (dx/d) * speed;
+      w.y += (dy/d) * speed;
+      w.facing = dx > 0 ? 1 : -1;
+      w.walkPhase += 0.24;
+    } else {
+      w.x = slot.x; w.y = slot.y;
+      w.facing = 1;
+    }
+    return true;
+  }
+
+  // Applicera fysik på fallande bitar tills de landar på marken
+  function updateFallenPieces() {
+    if (!state.fallenPieces) state.fallenPieces = [];
+    for (const p of state.fallenPieces) {
+      if (p.resting) continue;
+      p.vy += 0.22;   // gravitation
+      p.x += p.vx;
+      p.y += p.vy;
+      if (p.y >= p.targetY) {
+        p.y = p.targetY;
+        // Liten studs som dör ut
+        if (Math.abs(p.vy) > 0.6) {
+          p.vy *= -0.28;
+          p.vx *= 0.5;
+          // Damm-partiklar vid nedslaget
+          for (let i = 0; i < 4; i++) {
+            state.cracks.push({
+              x: p.x + (Math.random()-0.5)*8,
+              y: p.y + 4,
+              vx: (Math.random()-0.5)*1.2,
+              vy: -Math.random()*0.8,
+              life: 0.6, color: '#c89870', grav: 0.1,
+            });
+          }
+        } else {
+          p.resting = true;
+          p.vy = 0;
+          p.vx = 0;
+        }
+      }
+    }
+  }
+
+  // Rekrytera en slav att plocka upp fallande bit och bära den till släden
+  function assignPieceCollector() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    if (!state.fallenPieces || state.fallenPieces.length === 0) return;
+    for (const piece of state.fallenPieces) {
+      if (!piece.resting) continue;
+      // Kolla om nån redan är på väg
+      if (piece.claimedBy) {
+        const claimer = piece.claimedBy;
+        if (claimer && claimer.pieceCollectTask === piece) continue;
+        piece.claimedBy = null;
+      }
+      // Piece kan levereras oavsett släd-läge — hemma-högen växer om släden är borta
+      const sled = state.stationSleds && state.stationSleds[piece.stationIdx];
+      if (!sled) continue;
+      const eligible = workers.filter(w =>
+        w.state === 'idle' && !w.enteringFrom && !w.carrying &&
+        !w.torchTask && !w.bearerOf && !w.woodTask && !w.lintelTask &&
+        !w.crankTask && !w.sledTask && !w.sawerTask && !w.waterPourerTask &&
+        !w.pieceCollectTask &&
+        (w.pickupTimer || 0) === 0 &&
+        w.scared < 0.5
+      );
+      if (eligible.length === 0) return;
+      // Välj den närmaste (så det ser smart ut)
+      let best = eligible[0], bestD = Infinity;
+      for (const w of eligible) {
+        const d = Math.hypot(w.x - piece.x, w.y - piece.y);
+        if (d < bestD) { bestD = d; best = w; }
+      }
+      best.pieceCollectTask = piece;
+      best.pieceCollectPhase = 'fetch';
+      best.pieceCollectStation = piece.stationIdx;
+      best.target = null;
+      piece.claimedBy = best;
+    }
+  }
+
+  function handlePieceCollectTask(w) {
+    if (state.era !== 'egypt' || !w.pieceCollectTask) {
+      w.pieceCollectTask = null; w.pieceCollectPhase = null; w.pieceCollectStation = null;
+      return false;
+    }
+    const piece = w.pieceCollectTask;
+    if (w.pieceCollectPhase === 'fetch') {
+      // Om biten inte finns kvar (annan slav plockade den, buggar? etc) — avbryt
+      if (!state.fallenPieces.includes(piece)) {
+        w.pieceCollectTask = null; w.pieceCollectPhase = null; w.pieceCollectStation = null;
+        w.carrying = false;
+        return false;
+      }
+      const dx = piece.x - w.x, dy = piece.y - w.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 3) {
+        const speed = 1.4;
+        w.x += (dx/d) * speed;
+        w.y += (dy/d) * speed;
+        w.facing = dx > 0 ? 1 : -1;
+        w.walkPhase += 0.24;
+      } else {
+        // Plocka upp
+        w.x = piece.x; w.y = piece.y;
+        const idx = state.fallenPieces.indexOf(piece);
+        if (idx >= 0) state.fallenPieces.splice(idx, 1);
+        w.carrying = true;
+        w.pieceCollectPhase = 'deliver';
+        // Damm-poff när stenen lyfts
+        for (let i = 0; i < 3; i++) {
+          state.cracks.push({
+            x: w.x + (Math.random()-0.5)*8,
+            y: w.y + 2, vx: (Math.random()-0.5)*1, vy: -Math.random()*0.6,
+            life: 0.5, color: '#c89870', grav: 0.1,
+          });
+        }
+      }
+      return true;
+    } else if (w.pieceCollectPhase === 'deliver') {
+      const stationIdx = w.pieceCollectStation;
+      const sled = state.stationSleds && state.stationSleds[stationIdx];
+      // Kolla var slaven ska lägga stenen: på släden (om vid station med plats)
+      // eller framför släden (hemma-hög) om släden är borta eller full
+      const putOnSled = sled && sled.state === 'at-station' && sled.load < sled.capacity;
+      const dest = putOnSled ? stationSledPos(stationIdx) : stationHomePilePos(stationIdx);
+      const targetX = putOnSled ? dest.x - 12 : dest.x;
+      const targetY = dest.y + 4;
+      const dx = targetX - w.x, dy = targetY - w.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 3) {
+        const speed = 1.2;
+        w.x += (dx/d) * speed;
+        w.y += (dy/d) * speed;
+        w.facing = dx > 0 ? 1 : -1;
+        w.walkPhase += 0.22;
+      } else {
+        // Om release-läget hunnit ändras (t.ex. släde precis blev full) — kolla om
+        if (sled && sled.state === 'at-station' && sled.load < sled.capacity) {
+          sled.load = Math.min(sled.capacity, sled.load + 1);
+        } else {
+          if (!state.stationHomePile) state.stationHomePile = [0];
+          state.stationHomePile[stationIdx] = (state.stationHomePile[stationIdx] || 0) + 1;
+        }
+        w.carrying = false;
+        w.pieceCollectTask = null;
+        w.pieceCollectPhase = null;
+        w.pieceCollectStation = null;
+        spawnFloater(dest.x, dest.y - 12, '+I', '#c89870');
+      }
+      return true;
+    }
+    return false;
+  }
+
+  function updateOneBigBlock(bb) {
+    if (bb.state === 'in-quarry' || bb.state === 'gathering') {
+      // Behöver en tilldelad station innan sled-gänget kan formera sig
+      if (bb.stationIdx == null) {
+        bb.stationIdx = pickFreeStationForBlock();
+        if (bb.stationIdx == null) return;
+      }
+      const sledSlaves = workers.filter(w => w.sledTask && w.sledBlock === bb);
+      if (sledSlaves.length >= 4) {
+        let allInPlace = true;
+        for (const w of sledSlaves) {
+          const slot = sledSlotPos(w.sledSlot || 0, bb);
+          if (Math.hypot(w.x - slot.x, w.y - slot.y) > 8) allInPlace = false;
+        }
+        bb.state = allInPlace ? 'being-dragged' : 'gathering';
+      }
+    } else if (bb.state === 'being-dragged') {
+      const target = cuttingStationPos(bb.stationIdx);
+      const dx = target.x - bb.x, dy = target.y - bb.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 4) {
+        const speed = 0.35;
+        bb.x += (dx / d) * speed;
+        bb.y += (dy / d) * speed;
+        const sledSlaves = workers.filter(w => w.sledTask && w.sledBlock === bb);
+        for (const w of sledSlaves) {
+          const slot = sledSlotPos(w.sledSlot || 0, bb);
+          const wdx = slot.x - w.x, wdy = slot.y - w.y;
+          const wd = Math.hypot(wdx, wdy);
+          if (wd > 1) {
+            w.x += (wdx / wd) * speed * 1.05;
+            w.y += (wdy / wd) * speed * 1.05;
+            w.walkPhase += 0.14;
+            w.facing = 1;
+          }
+        }
+      } else {
+        bb.x = target.x;
+        bb.y = target.y;
+        bb.state = 'at-cutting';
+        // Släpp sled-gänget och ge dem omedelbart en ny akut uppgift så de inte står stilla
+        const sledSlaves = workers.filter(w => w.sledTask && w.sledBlock === bb);
+        for (const w of sledSlaves) {
+          w.sledTask = false;
+          w.sledBlock = null;
+          w.sledSlot = null;
+          w.target = null;
+          assignUrgentEgyptTaskTo(w);
+        }
+      }
+    } else if (bb.state === 'at-cutting' || bb.state === 'being-cut') {
+      // Släden vid denna station: sluta såga om den är full
+      const sled = state.stationSleds[bb.stationIdx];
+      if (sled && sled.load >= sled.capacity) return;
+      const sawers = workers.filter(w => w.sawerTask && w.sawerBlock === bb);
+      const waterPourer = workers.find(w => w.waterPourerTask && w.waterPourerBlock === bb);
+      const sawersInPlace = sawers.filter(w => {
+        const sp = sawerSlotPos(bb);
+        return Math.hypot(w.x - sp.x, w.y - sp.y) < 6;
+      }).length;
+      const waterInPlace = waterPourer && (() => {
+        const wp = waterPourerSlotPos(bb);
+        return Math.hypot(waterPourer.x - wp.x, waterPourer.y - wp.y) < 6;
+      })();
+      if (sawersInPlace >= 1 && waterInPlace) {
+        bb.state = 'being-cut';
+        bb.cutTimer++;
+        bb.cutDepth = Math.min(1, bb.cutTimer / 180);
+        if (bb.cutTimer >= 180) {
+          bb.cutTimer = 0;
+          bb.cutDepth = 0;
+          // Spara LEFTMOST bitens position (den som skiljs av) INNAN vi krymper blocket
+          const oldLeftEdge = bb.x - bb.stonesLeft * PYR_BLOCK_W / 2;
+          const pieceCenterX = oldLeftEdge + PYR_BLOCK_W / 2;
+          const pieceCenterY = bb.y;
+          bb.stonesLeft--;
+          // Skifta blocket åt HÖGER med W/2 så resterande bitar behåller sina positioner
+          bb.x += PYR_BLOCK_W / 2;
+          // Skapa en fallande bit — den skiljs av och tippar av vänster kant
+          if (!state.fallenPieces) state.fallenPieces = [];
+          state.fallenPieces.push({
+            id: ++state._pieceIdCounter,
+            x: pieceCenterX,
+            y: pieceCenterY,
+            vx: -1.2,   // åker åt vänster (tippar av bänken)
+            vy: -1.2,   // liten pop uppåt
+            resting: false,
+            targetY: bb.y + 22,   // hamnar på marken bredvid bänken
+            stationIdx: bb.stationIdx,
+            claimedBy: null,
+          });
+          for (let i = 0; i < 12; i++) {
+            state.cracks.push({
+              x: pieceCenterX + (Math.random()-0.5)*20,
+              y: pieceCenterY - 4 + Math.random()*8,
+              vx: (Math.random()-0.5)*2.5,
+              vy: -Math.random()*1.8 - 0.3,
+              life: 1.0, color: i < 6 ? '#d4a070' : '#c89870', grav: 0.08,
+            });
+          }
+          if (bb.stonesLeft <= 0) {
+            for (const s of sawers) {
+              s.sawerTask = false; s.sawerBlock = null; s.sawerSlot = null;
+              s.target = null;
+              assignUrgentEgyptTaskTo(s);
+            }
+            if (waterPourer) {
+              waterPourer.waterPourerTask = false;
+              waterPourer.waterPourerBlock = null;
+              waterPourer.target = null;
+              assignUrgentEgyptTaskTo(waterPourer);
+            }
+            bb.state = 'done';
+            bb.spawnDelay = 240;
+          }
+        }
+      }
+    } else if (bb.state === 'done') {
+      // Blocket är helt uppsågat — vänta lite och ta sen bort det (respawnar inte, fixed reserve)
+      bb.spawnDelay--;
+      if (bb.spawnDelay <= 0) {
+        bb.remove = true;
+      }
+    }
+  }
+  // Backwards-compat alias — flera call-sites använder updateBigBlock()
+  function updateBigBlock() { return updateBigBlocks(); }
+
+  // KONSOLIDERAR: fyll ETT block i taget istället för att sprida ut slavar över flera.
+  // Om flera block är delvis bemannade → stjäl från de med FÄRRE slavar mot det med FLERA.
+  function assignSledGang() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    if (!state.bigBlocks) return;
+    // Skippa block-drag om pyramiden redan har mycket sten väntande på användning
+    // eller om det finns 10+ stenar utanför pyramiden totalt
+    const carriersEnRoute = workers.filter(o =>
+      o.carrying && !o.lintelTask && !o.woodTask && !o.pieceCollectTask
+    ).length;
+    const pyrCap = state.blocksTarget || 55;
+    const remaining = pyrCap - state.blocksPlaced;
+    const totalOutside = countStonesOutsidePyramid();
+    if (totalOutside + carriersEnRoute >= remaining) return;
+    if (totalOutside >= 8) return;   // överflöd — alla ska bygga istället
+    const candidates = state.bigBlocks.filter(b =>
+      (b.state === 'in-quarry' || b.state === 'gathering') && b.stationIdx != null);
+    if (candidates.length === 0) return;
+    // Målblock = det som redan har flest slavar men inte är fullt
+    let target = null, bestActive = -1;
+    for (const bb of candidates) {
+      const active = workers.filter(w => w.sledTask && w.sledBlock === bb).length;
+      if (active >= 4) continue;
+      if (active > bestActive) { bestActive = active; target = bb; }
+    }
+    if (!target) return;
+    const active = workers.filter(w => w.sledTask && w.sledBlock === target);
+    const slotsUsed = new Set(active.map(w => w.sledSlot || 0));
+    let freeSlot = -1;
+    for (let i = 0; i < 4; i++) { if (!slotsUsed.has(i)) { freeSlot = i; break; } }
+    if (freeSlot < 0) return;
+    // Först: helt lediga slavar
+    let eligible = workers.filter(w =>
+      !w.sledTask && !w.enteringFrom && !w.carrying &&
+      !w.torchTask && !w.bearerOf && !w.woodTask && !w.lintelTask &&
+      !w.crankTask && !w.cutterTask && !w.sledDragTask &&
+      !w.sawerTask && !w.waterPourerTask && !w.pieceCollectTask &&
+      (w.pickupTimer || 0) === 0 &&
+      w.scared < 0.5
+    );
+    // Om inga lediga → STJÄL från block med färre slavar än target
+    if (eligible.length === 0) {
+      const targetActive = bestActive;
+      eligible = workers.filter(w => {
+        if (!w.sledTask || w.sledBlock === target) return false;
+        if (w.enteringFrom || w.carrying) return false;
+        if (w.torchTask || w.bearerOf || w.woodTask || w.lintelTask) return false;
+        if (w.crankTask || w.cutterTask || w.sledDragTask) return false;
+        if (w.sawerTask || w.waterPourerTask || w.pieceCollectTask) return false;
+        if ((w.pickupTimer || 0) > 0) return false;
+        if (w.scared >= 0.5) return false;
+        // Bara stjäla från block som har FÄRRE slavar än target (så vi konvergerar)
+        const sourceActive = workers.filter(o => o.sledTask && o.sledBlock === w.sledBlock).length;
+        return sourceActive < targetActive || sourceActive <= 2;
+      });
+    }
+    if (eligible.length === 0) return;
+    const chosen = eligible[Math.floor(Math.random() * eligible.length)];
+    // Rensa gammalt sled-uppdrag om vi stjäl
+    if (chosen.sledTask) {
+      chosen.sledTask = false;
+      chosen.sledBlock = null;
+      chosen.sledSlot = null;
+    }
+    chosen.sledTask = true;
+    chosen.sledBlock = target;
+    chosen.sledSlot = freeSlot;
+    chosen.target = null;
+    chosen.atRestZone = false;
+    chosen.restZone = null;
+    chosen.restSpot = null;
+    chosen.lazyAction = null;
+    chosen.lazyTimer = 0;
+  }
+
+  function handleSledTask(w) {
+    if (state.era !== 'egypt' || !w.sledBlock) {
+      w.sledTask = false; w.sledBlock = null; w.sledSlot = null;
+      return false;
+    }
+    const bb = w.sledBlock;
+    if (bb.state === 'being-dragged') {
+      // Dragging hanteras i updateBigBlock — vi rör oss synkroniserat med släden
+      return true;   // skip resten av AI för denna slav
+    }
+    if (bb.state === 'at-cutting' || bb.state === 'being-cut' || bb.state === 'done') {
+      // Klart — släpp
+      w.sledTask = false; w.sledBlock = null; w.sledSlot = null;
+      return false;
+    }
+    // Gå till slot-positionen och vänta
+    const slot = sledSlotPos(w.sledSlot || 0, bb);
+    const dx = slot.x - w.x, dy = slot.y - w.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 3) {
+      const speed = 1.2;
+      w.x += (dx/d) * speed;
+      w.y += (dy/d) * speed;
+      w.facing = dx > 0 ? 1 : -1;
+      w.walkPhase += 0.22;
+    } else {
+      w.x = slot.x;
+      w.y = slot.y;
+      w.facing = 1;
+    }
+    return true;
+  }
+
+  // Reservera nästa lediga pyramid-slot för en bärare, så flera bärare inte alla springer
+  // mot samma slot och blir förvirrade när någon annan hinner först.
+  function reserveNextPyramidSlot(w) {
+    if (state.era !== 'egypt' || state.level !== 1) return null;
+    const reserved = new Set();
+    for (const o of workers) {
+      if (o !== w && o.reservedSlotIdx != null) reserved.add(o.reservedSlotIdx);
+    }
+    let idx = state.blocksPlaced;
+    const cap = state.blocksTarget || 55;
+    while (idx < cap) {
+      if (idx === 30 && !w.lintelTask) { idx++; continue; }   // hoppa över lintel-slot
+      if (!reserved.has(idx)) return idx;
+      idx++;
+    }
+    return null;
+  }
+
+  // Räkna totala stenar utanför pyramiden (sled load + hemma-hög + surplus + fallna bitar)
+  function countStonesOutsidePyramid() {
+    let n = 0;
+    for (const sled of state.stationSleds || []) n += sled.load || 0;
+    for (const h of state.stationHomePile || []) n += h || 0;
+    n += state.egyptSurplus || 0;
+    n += (state.fallenPieces || []).length;
+    return n;
+  }
+
+  // Rekrytera 1 sågare per block-som-behöver-sågas
+  function assignSawers() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    if (!state.bigBlocks) return;
+    // Om det redan finns 10+ stenar väntande — hoppa över, alla ska bygga
+    if (countStonesOutsidePyramid() >= 8) return;
+    for (const bb of state.bigBlocks) {
+      if (bb.state !== 'at-cutting' && bb.state !== 'being-cut') continue;
+      const sled = state.stationSleds[bb.stationIdx];
+      if (sled && sled.load >= sled.capacity) continue;   // pausar när släden är full
+      const active = workers.filter(w => w.sawerTask && w.sawerBlock === bb);
+      if (active.length >= 1) continue;
+      const eligible = workers.filter(w =>
+        w.state === 'idle' && !w.enteringFrom && !w.carrying &&
+        !w.torchTask && !w.bearerOf && !w.woodTask && !w.lintelTask &&
+        !w.crankTask && !w.sledTask && !w.sawerTask && !w.waterPourerTask &&
+        (w.pickupTimer || 0) === 0 &&
+        w.scared < 0.5
+      );
+      if (eligible.length === 0) return;
+      const chosen = eligible[Math.floor(Math.random() * eligible.length)];
+      chosen.sawerTask = true;
+      chosen.sawerBlock = bb;
+      chosen.sawerSlot = 0;
+      chosen.target = null;
+    }
+  }
+
+  function handleSawerTask(w) {
+    if (state.era !== 'egypt' || !w.sawerBlock) {
+      w.sawerTask = false; w.sawerBlock = null; w.sawerSlot = null;
+      return false;
+    }
+    const bb = w.sawerBlock;
+    if (bb.state === 'done' || bb.stonesLeft <= 0) {
+      w.sawerTask = false; w.sawerBlock = null; w.sawerSlot = null;
+      return false;
+    }
+    const target = sawerSlotPos(bb);
+    const dx = target.x - w.x, dy = target.y - w.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 3) {
+      const speed = 1.2;
+      w.x += (dx/d) * speed;
+      w.y += (dy/d) * speed;
+      w.facing = dx > 0 ? 1 : -1;
+      w.walkPhase += 0.22;
+    } else {
+      w.x = target.x;
+      w.y = target.y;
+      w.facing = 1;   // sågaren står till vänster om cut, tittar mot högra sidan av snittet
+      w.walkPhase += 0.35;
+    }
+    return true;
+  }
+
+  // Rekrytera 1 vattenhällare per block-som-behöver-sågas
+  function assignWaterPourer() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    if (!state.bigBlocks) return;
+    if (countStonesOutsidePyramid() >= 8) return;   // pausa vid överflöd
+    for (const bb of state.bigBlocks) {
+      if (bb.state !== 'at-cutting' && bb.state !== 'being-cut') continue;
+      const sled = state.stationSleds[bb.stationIdx];
+      if (sled && sled.load >= sled.capacity) continue;
+      const active = workers.filter(w => w.waterPourerTask && w.waterPourerBlock === bb).length;
+      if (active >= 1) continue;
+      const eligible = workers.filter(w =>
+        w.state === 'idle' && !w.enteringFrom && !w.carrying &&
+        !w.torchTask && !w.bearerOf && !w.woodTask && !w.lintelTask &&
+        !w.crankTask && !w.sledTask && !w.sawerTask && !w.waterPourerTask &&
+        (w.pickupTimer || 0) === 0 &&
+        w.scared < 0.5
+      );
+      if (eligible.length === 0) return;
+      const chosen = eligible[Math.floor(Math.random() * eligible.length)];
+      chosen.waterPourerTask = true;
+      chosen.waterPourerBlock = bb;
+      chosen.target = null;
+    }
+  }
+
+  function handleWaterPourerTask(w) {
+    if (state.era !== 'egypt' || !w.waterPourerBlock) {
+      w.waterPourerTask = false; w.waterPourerBlock = null;
+      return false;
+    }
+    const bb = w.waterPourerBlock;
+    if (bb.state === 'done' || bb.stonesLeft <= 0) {
+      w.waterPourerTask = false; w.waterPourerBlock = null;
+      return false;
+    }
+    const target = waterPourerSlotPos(bb);
+    const dx = target.x - w.x, dy = target.y - w.y;
+    const d = Math.hypot(dx, dy);
+    if (d > 3) {
+      const speed = 1.2;
+      w.x += (dx/d) * speed;
+      w.y += (dy/d) * speed;
+      w.facing = dx > 0 ? 1 : -1;
+      w.walkPhase += 0.22;
+    } else {
+      w.x = target.x;
+      w.y = target.y;
+      w.facing = -1;   // står till höger om cut, tittar mot cut till vänster
+      w.walkPhase += 0.12;
+    }
+    return true;
+  }
+
+  // Rita det stora sten-blocket + släden när dragande — nu med visuella bitar och synligt snitt
+  function drawBigBlock(bb) {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    if (!bb) return;
+    if (bb.state === 'done') return;
+    // Bredd = antal bitar kvar × pyramid-block-bredd så det är EXAKT proportionerligt
+    const pieceW = PYR_BLOCK_W;
+    const pieceH = PYR_BLOCK_H;
+    const bw = bb.stonesLeft * pieceW;
+    const bh = pieceH;
+    const x = bb.x, y = bb.y;
+    // Skugga
+    ctx.fillStyle = 'rgba(20,10,4,0.4)';
+    ctx.beginPath();
+    ctx.ellipse(x, y + bh/2 + 4, bw/2 + 6, 5, 0, 0, Math.PI*2);
+    ctx.fill();
+    // Släden under blocket (bara när dragande)
+    if (bb.state === 'being-dragged' || bb.state === 'gathering') {
+      ctx.fillStyle = '#5a3818';
+      ctx.fillRect(x - bw/2 - 4, y + bh/2 - 4, bw + 8, 4);
+      ctx.fillStyle = '#7a5028';
+      ctx.fillRect(x - bw/2 - 4, y + bh/2 - 4, bw + 8, 1.5);
+      ctx.fillStyle = '#3a2010';
+      ctx.fillRect(x - bw/2 - 6, y + bh/2, bw + 12, 3);
+      ctx.fillRect(x - bw/2 - 8, y + bh/2 - 1, 6, 4);
+      ctx.fillRect(x + bw/2 + 2, y + bh/2 - 1, 6, 4);
+    }
+    // Skugga bakom (samma som pyramid-blocken)
+    ctx.fillStyle = 'rgba(80,50,20,0.55)';
+    ctx.fillRect(x - bw/2 + 2, y - bh/2 + 2, bw, bh);
+    // Blocket ritas som EN stor massiv sten — inga synliga seams mellan bitar
+    // Main body — EXAKT pyramid-färg
+    ctx.fillStyle = '#d8b070';
+    ctx.fillRect(x - bw/2, y - bh/2, bw, bh);
+    // Bottom-list (ett långt streck längs hela blocket)
+    ctx.fillStyle = '#b88848';
+    ctx.fillRect(x - bw/2, y + bh/2 - 3, bw, 2);
+    // Höger-kant (bara på det verkliga blockets högra kant)
+    ctx.fillStyle = '#a07030';
+    ctx.fillRect(x + bw/2 - 1, y - bh/2, 1, bh);
+    // Grov textur / spricka-mönster istället för seams — små randomiserade fläckar
+    ctx.fillStyle = 'rgba(140,80,30,0.25)';
+    for (let i = 0; i < 5; i++) {
+      const seed = (bb.id * 71 + i * 13) | 0;
+      const tx = x - bw/2 + ((seed * 13) % (bw - 6)) + 3;
+      const ty = y - bh/2 + 3 + ((seed >> 3) % (bh - 6));
+      ctx.fillRect(tx, ty, 2, 1);
+    }
+    ctx.fillStyle = 'rgba(80,40,10,0.15)';
+    // Diagonala råhet-streck så det ser ut som naturlig sten
+    for (let i = 0; i < 3; i++) {
+      const seed = (bb.id * 41 + i * 17) | 0;
+      const tx = x - bw/2 + ((seed * 7) % (bw - 8)) + 4;
+      const ty = y - bh/2 + 4 + ((seed >> 5) % (bh - 8));
+      ctx.fillRect(tx, ty, 3, 0.6);
+    }
+    // Rep från blockets framsida till slavarna (bara när dragande/gathering)
+    if (bb.state === 'gathering' || bb.state === 'being-dragged') {
+      ctx.strokeStyle = '#8a6838';
+      ctx.lineWidth = 1.4;
+      const ropeStartX = x + bw/2 + 4;
+      const ropeStartY = y;
+      for (let i = 0; i < 4; i++) {
+        const slot = sledSlotPos(i, bb);
+        ctx.beginPath();
+        ctx.moveTo(ropeStartX, ropeStartY);
+        ctx.lineTo(slot.x - 6, slot.y - 4);
+        ctx.stroke();
+      }
+    }
+    // Under sågning: visa VERTIKALT sågsnitt som växer nerifrån — det skär av LEFTMOST biten
+    if (bb.state === 'being-cut' && bb.cutDepth > 0) {
+      const cutX = x - bw/2 + pieceW;   // seamen mellan leftmost biten och resten
+      const cutTopY = y - bh/2;
+      const gapDepth = bb.cutDepth * pieceH;   // hur långt sågen skurit ner
+      const gapW = 1.5 + bb.cutDepth * 2;   // spåret vidgas något ju djupare
+      // Öppna sågsnitt (mörkt spår)
+      ctx.fillStyle = '#3a2010';
+      ctx.fillRect(cutX - gapW / 2, cutTopY, gapW, gapDepth);
+      // Ljus reflekterande botten där sågen är just nu (sanden+vattnet glimmar)
+      ctx.fillStyle = '#6a4818';
+      ctx.fillRect(cutX - gapW / 2, cutTopY + gapDepth - 1.5, gapW, 1.5);
+      // Sten-flisor sprutas ur snittet
+      if (state.time % 6 === 0) {
+        for (let i = 0; i < 2; i++) {
+          state.cracks.push({
+            x: cutX + (Math.random()-0.5) * 2,
+            y: cutTopY + gapDepth - 1,
+            vx: (Math.random()-0.5) * 1.4,
+            vy: -Math.random() * 0.8 - 0.3,
+            life: 0.7, color: '#d4a070', grav: 0.08,
+          });
+        }
+      }
+    }
+  }
+
+  // Rita huggnings-stationen med den 4000-åriga kopparsågen + vatten-kanna
+  function drawCuttingStation(idx) {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    idx = idx || 0;
+    const p = cuttingStationPos(idx);
+    // Trä-plattform bred nog att bära hela blocket (max 5 pyramid-bitar = 140 px + marginal)
+    const BW = 170;
+    ctx.fillStyle = '#7a5028';
+    ctx.fillRect(p.x - BW/2, p.y - 2, BW, 5);
+    ctx.fillStyle = '#a06830';
+    ctx.fillRect(p.x - BW/2, p.y - 2, BW, 1.5);
+    ctx.fillStyle = '#5a3818';
+    ctx.fillRect(p.x - BW/2, p.y + 3, BW, 1.5);
+    // Stödben (fem stödben under den långa bänken)
+    ctx.fillStyle = '#5a3818';
+    ctx.fillRect(p.x - BW/2 + 2, p.y + 5, 3, 10);
+    ctx.fillRect(p.x - BW/2 + 42, p.y + 5, 3, 10);
+    ctx.fillRect(p.x - 2, p.y + 5, 3, 10);
+    ctx.fillRect(p.x + BW/2 - 45, p.y + 5, 3, 10);
+    ctx.fillRect(p.x + BW/2 - 5, p.y + 5, 3, 10);
+
+    // Blocket som är på denna station just nu
+    const bb = (state.bigBlocks || []).find(b => b.stationIdx === idx &&
+      (b.state === 'at-cutting' || b.state === 'being-cut'));
+    const sawer = bb ? workers.find(w => w.sawerTask && w.sawerBlock === bb) : null;
+    const sawerAtSlot = sawer && (() => {
+      const s = sawerSlotPos(bb);
+      return Math.hypot(sawer.x - s.x, sawer.y - s.y) < 6;
+    })();
+    if (sawer && sawerAtSlot && bb && (bb.state === 'at-cutting' || bb.state === 'being-cut')) {
+      const cutX = bigBlockCutX(bb);
+      const blockTop = bb.y - PYR_BLOCK_H / 2;
+      // Kopparmejsel: ner-tryckt i cut-snittet, längd växer med cutDepth
+      const chiselTipY = blockTop + (bb.cutDepth || 0) * PYR_BLOCK_H;
+      const chiselTopY = blockTop - 6;
+      // Kopparskaftet
+      ctx.fillStyle = '#c88028';
+      ctx.fillRect(cutX - 0.9, chiselTopY, 1.8, chiselTipY - chiselTopY);
+      ctx.fillStyle = '#e8a848';
+      ctx.fillRect(cutX - 0.9, chiselTopY, 0.5, chiselTipY - chiselTopY);
+      ctx.fillStyle = '#8a5018';
+      ctx.fillRect(cutX + 0.5, chiselTopY, 0.5, chiselTipY - chiselTopY);
+      // Trä-handtag ovanpå mejseln
+      ctx.fillStyle = '#5a3818';
+      ctx.fillRect(cutX - 2.5, chiselTopY - 5, 5, 5);
+      ctx.fillStyle = '#7a5028';
+      ctx.fillRect(cutX - 2.5, chiselTopY - 5, 5, 1.2);
+      // HAMMAREN — svänger i takt ovan mejseln
+      // swing 0..1..0..1 där 1 = topp (rest), 0 = impact på mejseln
+      const chopPhase = state.time * 0.20;
+      const raw = Math.sin(chopPhase);
+      const swing = raw < 0 ? -raw : raw;   // 0..1..0..1..
+      const impact = swing < 0.15;
+      // Position: hammaren är HÖGT när swing=1 (12 px över mejseln), NER vid mejseltopp när swing=0
+      const malleY = chiselTopY - 5 - swing * 14;
+      const malleX = cutX + 4 + swing * 2;   // liten sväng åt höger på uppslag
+      const malleRot = -0.5 + swing * 0.9;   // roterar från "över axel" till "rakt ner"
+      ctx.save();
+      ctx.translate(malleX, malleY);
+      ctx.rotate(malleRot);
+      // Hammar-huvud (avlångt trä-block med metallband)
+      ctx.fillStyle = '#5a3818';
+      ctx.fillRect(-7, -3, 14, 6);
+      ctx.fillStyle = '#7a5028';
+      ctx.fillRect(-7, -3, 14, 1.5);
+      ctx.fillStyle = '#3a2010';
+      ctx.fillRect(-7, 1, 14, 1);
+      // Metallband
+      ctx.fillStyle = '#2a2820';
+      ctx.fillRect(-5, -3, 1, 6);
+      ctx.fillRect(4, -3, 1, 6);
+      // Skaft (trä-pinne)
+      ctx.fillStyle = '#8a6838';
+      ctx.fillRect(-1, 3, 2, 14);
+      ctx.fillStyle = '#5a3818';
+      ctx.fillRect(-1, 3, 0.6, 14);
+      ctx.restore();
+      // Slavens armar — vänster håller mejseln, höger svingar hammaren
+      const shoulderY = sawer.y - 9;
+      ctx.strokeStyle = sawer.skin;
+      ctx.lineWidth = 2.6;
+      ctx.lineCap = 'round';
+      // Vänster hand → mejsel-handtag (kort och stadig)
+      ctx.beginPath();
+      ctx.moveTo(sawer.x - 1, shoulderY - 1);
+      ctx.lineTo(cutX, chiselTopY - 3);
+      ctx.stroke();
+      // Höger hand → hammarens skaft (rör sig med hammaren)
+      ctx.beginPath();
+      ctx.moveTo(sawer.x + 2, shoulderY);
+      // Handen greppar skaftet ~mitten
+      const handOffsetX = Math.cos(malleRot) * 6;
+      const handOffsetY = Math.sin(malleRot) * 6 + 8;
+      ctx.lineTo(malleX + handOffsetX, malleY + handOffsetY);
+      ctx.stroke();
+      ctx.lineCap = 'butt';
+      // Vid IMPACT: stora sten-flisor + kort "vit blink" på slaget
+      if (impact && state.time % 2 === 0) {
+        // Vita gnistor kring impactpunkten
+        ctx.fillStyle = 'rgba(255,240,200,0.65)';
+        ctx.beginPath();
+        ctx.arc(cutX, chiselTopY - 3, 3, 0, Math.PI * 2);
+        ctx.fill();
+        // Stenflisor sprutar ut från snittet
+        for (let i = 0; i < 5; i++) {
+          state.cracks.push({
+            x: cutX + (Math.random()-0.5) * 4,
+            y: chiselTipY,
+            vx: (Math.random()-0.5) * 3,
+            vy: -Math.random() * 2 - 0.4,
+            life: 0.9, color: '#d4a070', grav: 0.11,
+          });
+        }
+      }
+    }
+
+    // Vattenkanna vid vattenhällarens position — bara när hen är där
+    const waterer = bb ? workers.find(w => w.waterPourerTask && w.waterPourerBlock === bb) : null;
+    if (waterer && bb && (bb.state === 'being-cut')) {
+      const wp = waterPourerSlotPos(bb);
+      const jugX = wp.x, jugY = wp.y - 4;
+      // Håll kannan över sågspåret — vinklad så vattnet rinner ut
+      ctx.save();
+      ctx.translate(jugX, jugY);
+      ctx.rotate(-0.4);   // lutad framåt
+      ctx.fillStyle = '#7a3818';
+      ctx.beginPath();
+      ctx.moveTo(-4, -3);
+      ctx.quadraticCurveTo(-6, 3, -3, 8);
+      ctx.lineTo(3, 8);
+      ctx.quadraticCurveTo(6, 3, 4, -3);
+      ctx.closePath();
+      ctx.fill();
+      // Mynning
+      ctx.fillStyle = '#3a1808';
+      ctx.fillRect(-4, -4, 8, 1.5);
+      // Ansning
+      ctx.strokeStyle = '#5a3010';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.arc(-5, 2, 3, -Math.PI * 0.4, Math.PI * 0.4);
+      ctx.stroke();
+      ctx.restore();
+      // Vattendroppar som rinner ner från kannan mot sågspåret
+      const dropPhase = state.time * 0.2;
+      for (let i = 0; i < 3; i++) {
+        const dt = (dropPhase + i * 0.35) % 1;
+        const dropX = jugX + 2 + Math.sin(dt * Math.PI) * 3;
+        const dropY = jugY + 4 + dt * 14;
+        ctx.fillStyle = `rgba(120,180,220,${0.7 * (1 - dt)})`;
+        ctx.beginPath();
+        ctx.arc(dropX, dropY, 1.4, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Blöt fläck på blocket (sågspåret)
+      ctx.fillStyle = 'rgba(60,80,120,0.35)';
+      ctx.fillRect(p.x - 12, p.y + 5, 24, 2);
+    }
+  }
+
+  // Rita surplus-högen vid pyramiden (stenar som lämnades när pyramid-slot var upptagen)
+  function drawEgyptSurplusPile() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    const n = state.egyptSurplus || 0;
+    if (n <= 0) return;
+    const pile = egyptSurplusPilePos();
+    const bw = Math.round(PYR_BLOCK_W - 1);
+    const bh = Math.round(PYR_BLOCK_H - 1);
+    function capForRow(r) { return r < 1 ? 3 : r < 2 ? 2 : 1; }
+    let placed = 0;
+    let row = 0;
+    let currentY = pile.y;
+    while (placed < n) {
+      const cols = capForRow(row);
+      const rowW = cols * bw + (cols - 1) * 2;
+      for (let c = 0; c < cols && placed < n; c++) {
+        const seed = (placed * 61 + row * 11) | 0;
+        const dx = ((seed >> 3) & 3) - 1.5;
+        const dy = ((seed >> 5) & 3) - 1;
+        const tilt = (((seed >> 7) & 7) - 3) * 0.006;
+        const x = pile.x - rowW / 2 + c * (bw + 2) + dx;
+        const y = currentY - bh + dy;
+        ctx.save();
+        ctx.translate(x + bw / 2, y + bh);
+        ctx.rotate(tilt);
+        ctx.translate(-(x + bw / 2), -(y + bh));
+        ctx.fillStyle = 'rgba(80,50,20,0.55)';
+        ctx.fillRect(x + 2, y + 2, bw, bh);
+        // SAMMA färger som pyramid-blocken
+        ctx.fillStyle = '#d8b070';
+        ctx.fillRect(x, y, bw, bh);
+        ctx.fillStyle = '#b88848';
+        ctx.fillRect(x, y + bh - 3, bw, 2);
+        ctx.fillStyle = '#a07030';
+        ctx.fillRect(x + bw - 2, y, 1, bh);
+        ctx.restore();
+        placed++;
+      }
+      currentY = currentY - bh + 2;
+      row++;
+      if (row > 30) break;
+    }
+  }
+
+  // Rita hemma-högen FRAMFÖR släden (växer när släden är full eller borta)
+  function drawStationHomePile(idx) {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    const n = (state.stationHomePile || [])[idx] || 0;
+    if (n <= 0) return;
+    const home = stationHomePilePos(idx);
+    const bw = PYR_BLOCK_W - 1;
+    const bh = PYR_BLOCK_H - 1;
+    function capForRow(r) { return r < 1 ? 3 : r < 2 ? 2 : 1; }
+    let placed = 0;
+    let row = 0;
+    let baseY = home.y - bh;
+    while (placed < n && row < 8) {
+      const cols = capForRow(row);
+      const rowW = cols * bw + (cols - 1) * 2;
+      for (let c = 0; c < cols && placed < n; c++) {
+        const seed = (placed * 71 + row * 13 + idx * 5) | 0;
+        const dx = ((seed >> 3) & 3) - 1.5;
+        const tilt = (((seed >> 7) & 7) - 3) * 0.005;
+        const bx = home.x - rowW / 2 + c * (bw + 2) + dx;
+        const by = baseY + (bh + 2) * (-row);
+        ctx.save();
+        ctx.translate(bx + bw / 2, by + bh);
+        ctx.rotate(tilt);
+        ctx.translate(-(bx + bw / 2), -(by + bh));
+        ctx.fillStyle = 'rgba(80,50,20,0.55)';
+        ctx.fillRect(bx + 2, by + 2, bw, bh);
+        ctx.fillStyle = '#d8b070';
+        ctx.fillRect(bx, by, bw, bh);
+        ctx.fillStyle = '#b88848';
+        ctx.fillRect(bx, by + bh - 3, bw, 2);
+        ctx.fillStyle = '#a07030';
+        ctx.fillRect(bx + bw - 2, by, 1, bh);
+        ctx.restore();
+        placed++;
+      }
+      row++;
+    }
+  }
+
+  // Visa hur många stora block som finns kvar i reserven (så spelaren vet)
+  function drawBigBlockReserveIndicator() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    const visible = (state.bigBlocks || []).filter(b => b.state !== 'done').length;
+    const reserve = state.bigBlockReserve || 0;
+    const total = visible + reserve;
+    // Placera högt över quarryn, kolla att inget överlappar
+    const x = quarry.x + quarry.w / 2;
+    const y = quarry.y - 8;
+    // Bakgrunds-plakat (papyrus-look)
+    ctx.fillStyle = 'rgba(30,20,10,0.6)';
+    const w = 92, h = 18;
+    ctx.fillRect(x - w/2, y - h, w, h);
+    ctx.strokeStyle = '#8a6838';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x - w/2, y - h, w, h);
+    // Liten sten-ikon
+    ctx.fillStyle = '#d8b070';
+    ctx.fillRect(x - w/2 + 6, y - h + 4, 10, 8);
+    ctx.fillStyle = '#b88848';
+    ctx.fillRect(x - w/2 + 6, y - h + 10, 10, 2);
+    ctx.fillStyle = '#a07030';
+    ctx.fillRect(x - w/2 + 15, y - h + 4, 1, 8);
+    // Text
+    ctx.fillStyle = '#f4d060';
+    ctx.font = 'bold 12px monospace';
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'top';
+    ctx.fillText(`${total} block`, x - w/2 + 22, y - h + 3);
+    // Undertext: hur många finns i quarryn just nu
+    ctx.fillStyle = '#c8a870';
+    ctx.font = '9px monospace';
+    ctx.fillText(`(${visible} synliga)`, x - w/2 + 22, y - h + 12);
+    ctx.textAlign = 'left';
+    ctx.textBaseline = 'alphabetic';
+  }
+
+  // Rita fallande / vilande bitar som väntar på att plockas upp
+  function drawFallenPieces() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    const pieces = state.fallenPieces || [];
+    for (const p of pieces) {
+      // Marken-skugga precis under stenen (mörknar när den ligger still)
+      const shadowA = p.resting ? 0.45 : 0.25;
+      ctx.fillStyle = `rgba(20,10,4,${shadowA})`;
+      ctx.beginPath();
+      ctx.ellipse(p.x, p.targetY + PYR_BLOCK_H/2, PYR_BLOCK_W / 2 + 2, 3, 0, 0, Math.PI*2);
+      ctx.fill();
+      // Sten som är EXAKT samma format som pyramid-blocken
+      const bx = p.x - PYR_BLOCK_W / 2;
+      const by = p.y - PYR_BLOCK_H / 2;
+      ctx.save();
+      // Roter något beroende på pos (så det ser ut att den ramlade slumpmässigt)
+      const tilt = p.resting ? ((p.id * 11 % 7) - 3) * 0.008 : Math.sin(p.vy * 0.4) * 0.05;
+      ctx.translate(p.x, p.y + PYR_BLOCK_H / 2);
+      ctx.rotate(tilt);
+      ctx.translate(-p.x, -(p.y + PYR_BLOCK_H / 2));
+      // Bakskugga (kopierad från pyramid-blocken)
+      ctx.fillStyle = 'rgba(80,50,20,0.55)';
+      ctx.fillRect(bx + 2, by + 2, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1);
+      // Main
+      ctx.fillStyle = '#d8b070';
+      ctx.fillRect(bx, by, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1);
+      // Bottom-list
+      ctx.fillStyle = '#b88848';
+      ctx.fillRect(bx, by + PYR_BLOCK_H - 3, PYR_BLOCK_W - 1, 2);
+      // Höger-kant
+      ctx.fillStyle = '#a07030';
+      ctx.fillRect(bx + PYR_BLOCK_W - 2, by, 1, PYR_BLOCK_H - 1);
+      ctx.restore();
+    }
+  }
+
+  // Rita släden vid en given station med staplade färdig-sågade stenar
+  function drawStationSled(idx) {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    const sled = (state.stationSleds || [])[idx];
+    if (!sled) return;
+    const s = stationSledPos(idx);
+    // Slädens plattform (trä-plankor med metallband)
+    const sledW = 68, sledH = 6;
+    // Marken-skugga
+    ctx.fillStyle = 'rgba(20,10,4,0.35)';
+    ctx.beginPath();
+    ctx.ellipse(s.x, s.y + 6, sledW / 2 + 4, 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Undre glidmedar (två plankor på marken)
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(s.x - sledW / 2 - 4, s.y + 2, sledW + 8, 3);
+    ctx.fillStyle = '#5a3818';
+    ctx.fillRect(s.x - sledW / 2 - 6, s.y + 3, 5, 3);
+    ctx.fillRect(s.x + sledW / 2 + 1, s.y + 3, 5, 3);
+    // Slädens platta
+    ctx.fillStyle = '#7a5028';
+    ctx.fillRect(s.x - sledW / 2, s.y - sledH + 2, sledW, sledH);
+    ctx.fillStyle = '#a06830';
+    ctx.fillRect(s.x - sledW / 2, s.y - sledH + 2, sledW, 1.5);
+    ctx.fillStyle = '#5a3818';
+    ctx.fillRect(s.x - sledW / 2, s.y - 1, sledW, 1.5);
+    // Metallband tvärs släden (håller ihop plankorna)
+    ctx.fillStyle = '#3a2820';
+    ctx.fillRect(s.x - sledW / 2 + 10, s.y - sledH + 1, 1.5, sledH);
+    ctx.fillRect(s.x + sledW / 2 - 11, s.y - sledH + 1, 1.5, sledH);
+    // Drag-rep-ögla på vänster ände (dit slavar hakar in för att dra släden)
+    ctx.strokeStyle = '#8a6838';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.arc(s.x - sledW / 2 - 2, s.y - 2, 3, 0.2, Math.PI - 0.2);
+    ctx.stroke();
+
+    // Stenarna på släden (pyramid-block-form, staplade)
+    const n = sled.load || 0;
+    if (n <= 0) return;
+    const bw = PYR_BLOCK_W - 1;
+    const bh = PYR_BLOCK_H - 1;
+    // Två i botten-raden, ovanpå en, osv. Kapacitet 6 = 3+2+1 (trekantig stack)
+    function capForRow(r) { return r < 1 ? 3 : r < 2 ? 2 : 1; }
+    let placed = 0;
+    let row = 0;
+    let baseY = s.y - sledH + 2 - bh;   // ovanpå slädens platta
+    while (placed < n && row < 6) {
+      const cols = capForRow(row);
+      const rowW = cols * bw + (cols - 1) * 2;
+      for (let c = 0; c < cols && placed < n; c++) {
+        const seed = (placed * 71 + row * 13 + idx * 5) | 0;
+        const dx = ((seed >> 3) & 3) - 1.5;
+        const tilt = (((seed >> 7) & 7) - 3) * 0.005;
+        const bx = s.x - rowW / 2 + c * (bw + 2) + dx;
+        const by = baseY + (bh + 2) * (-row);
+        ctx.save();
+        ctx.translate(bx + bw / 2, by + bh);
+        ctx.rotate(tilt);
+        ctx.translate(-(bx + bw / 2), -(by + bh));
+        // Bakskugga
+        ctx.fillStyle = 'rgba(80,50,20,0.55)';
+        ctx.fillRect(bx + 2, by + 2, bw, bh);
+        // Main
+        ctx.fillStyle = '#d8b070';
+        ctx.fillRect(bx, by, bw, bh);
+        // Bottom-list
+        ctx.fillStyle = '#b88848';
+        ctx.fillRect(bx, by + bh - 3, bw, 2);
+        // Höger-kant
+        ctx.fillStyle = '#a07030';
+        ctx.fillRect(bx + bw - 2, by, 1, bh);
+        ctx.restore();
+        placed++;
+      }
+      row++;
+    }
+
+  }
+
+  // Rita cut-högen (färdiga sten-block staplade) — legacy, nu tomt eftersom vi använder släder
+  function drawEgyptCutPile() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    const n = state.egyptCutPile || 0;
+    if (n <= 0) return;
+    const pile = egyptCutPilePos();
+    const bw = Math.round(PYR_BLOCK_W - 2);
+    const bh = Math.round(PYR_BLOCK_H - 2);
+    function capForRow(r) { return r < 1 ? 3 : r < 2 ? 2 : 1; }
+    let placed = 0;
+    let row = 0;
+    let currentY = pile.y;
+    while (placed < n) {
+      const cols = capForRow(row);
+      const rowW = cols * bw + (cols - 1) * 2;
+      const rowJitter = ((row * 29) % 3) - 1;
+      for (let c = 0; c < cols && placed < n; c++) {
+        const seed = (placed * 71 + row * 13) | 0;
+        const dx = ((seed >> 3) & 3) - 1.5;
+        const dy = ((seed >> 5) & 3) - 1;
+        const tilt = (((seed >> 7) & 7) - 3) * 0.006;
+        const x = pile.x - rowW / 2 + c * (bw + 2) + dx + rowJitter;
+        const y = currentY - bh + dy;
+        ctx.save();
+        ctx.translate(x + bw / 2, y + bh);
+        ctx.rotate(tilt);
+        ctx.translate(-(x + bw / 2), -(y + bh));
+        // Skugga
+        ctx.fillStyle = 'rgba(80,50,20,0.55)';
+        ctx.fillRect(x + 2, y + 2, bw, bh);
+        // EXAKT samma färg-schema som pyramid-blocken
+        ctx.fillStyle = '#d8b070';   // main body
+        ctx.fillRect(x, y, bw, bh);
+        // Bottom-list (pyramid-stil)
+        ctx.fillStyle = '#b88848';
+        ctx.fillRect(x, y + bh - 3, bw, 2);
+        // Höger-kant (pyramid-stil)
+        ctx.fillStyle = '#a07030';
+        ctx.fillRect(x + bw - 2, y, 1, bh);
+        ctx.restore();
+        placed++;
+      }
+      currentY = currentY - bh + 2;
+      row++;
+      if (row > 30) break;
+    }
   }
 
   // ---------- Ställnings-byggare: klättrar upp och hamrar/binder plankor ----------
@@ -9128,6 +11023,7 @@
   }
 
   function moveWorkerToward(w, tx, ty) {
+    if (tx == null || ty == null) return;
     const dx = tx - w.x, dy = ty - w.y;
     const d = Math.hypot(dx, dy);
     if (d < 0.001) return;
@@ -9285,6 +11181,19 @@
       drawDeliveryPile();
       drawStoneCart();
       drawPigeons(dayPhase);
+    }
+    // Egypt bana 1: quarry-block + huggnings-station + slädar + hemma-hög + fallande bitar + surplus
+    if (state.era === 'egypt' && state.level === 1) {
+      drawCuttingStation(0);
+      drawStationHomePile(0);
+      // Rita båda slädarna, den bakre först så den främre ligger ovanpå
+      const sledsSorted = [...(state.stationSleds || [])].sort((a, b) => (a.y || 0) - (b.y || 0));
+      for (const sled of sledsSorted) drawStationSled(sled.id);
+      // Sortera stora block efter y så bak-block ritas först
+      const sortedBlocks = [...(state.bigBlocks || [])].sort((a, b) => a.y - b.y);
+      for (const bb of sortedBlocks) drawBigBlock(bb);
+      drawFallenPieces();
+      drawEgyptSurplusPile();
     }
 
     // Workers + pharaoh + animals sorted by y
@@ -11947,6 +13856,23 @@
   function drawQuarry() {
     const baseY = quarry.y + quarry.h - 2;
     const isRome = state.era === 'rome';
+    // Egypt bana 1: quarryn har flera stora block istället för en hög med små stenar
+    // (blocken ritas separat via drawBigBlock). Här ritas bara marken.
+    if (state.era === 'egypt' && state.level === 1) {
+      ctx.fillStyle = 'rgba(140,90,40,0.28)';
+      ctx.beginPath();
+      ctx.ellipse(quarry.x + quarry.w/2, baseY + 6, quarry.w/2 + 30, 12, 0, 0, Math.PI*2);
+      ctx.fill();
+      // Några lösa små stenar/damm för karaktär (inga pyramider staplade)
+      ctx.fillStyle = '#9a6830';
+      ctx.fillRect(quarry.x + 4, baseY + 6, 8, 4);
+      ctx.fillRect(quarry.x + quarry.w - 20, baseY + 8, 10, 5);
+      ctx.fillRect(quarry.x + quarry.w/2 + 20, baseY + 10, 7, 4);
+      ctx.fillStyle = '#b88858';
+      ctx.fillRect(quarry.x + 5, baseY + 6, 6, 2);
+      ctx.fillRect(quarry.x + quarry.w - 19, baseY + 8, 7, 2);
+      return;
+    }
     // I Rom bryts inga stenar — quarryn är tömd. Visa bara marken (skugga) + ev. staplade
     // extra-stenar från molds. Ingen pyramidhög.
     if (isRome) {
@@ -15635,37 +17561,24 @@
           ctx.stroke();
         } else {
           {
-            // Sten ovan huvudet — dimensionera efter det faktiska bygg-blocket
-            // så det ser sammanhängande ut när det placeras (bana 2 blocks är dubbelt så stora)
-            const bw = Math.round(PYR_BLOCK_W - 2);   // matcha aktuell block-bredd
-            const bh = Math.round(PYR_BLOCK_H - 2);
-            const stoneMain = state.era === 'rome' ? '#e8dcc4' : '#c89870';
-            const stoneEdge = state.era === 'rome' ? '#a89880' : '#a07840';
-            const stoneDark = state.era === 'rome' ? '#7a6e58' : '#7a4818';
-            const stoneLight = state.era === 'rome' ? '#f4ecd8' : '#d8a878';
-            const stoneY = y - 24 - bh + bob;
-            const stoneX = x - bw / 2;
-            // Hus-mörk skugga bakom (åt höger)
-            ctx.fillStyle = stoneDark;
-            ctx.fillRect(stoneX + 2, stoneY + 2, bw, bh);
-            // Kropp
+            // Sten ovan huvudet — EXAKT samma rect-koordinater som drawBigPyramid
+            const stoneMain = state.era === 'rome' ? '#e8dcc4' : '#d8b070';
+            const stoneEdge = state.era === 'rome' ? '#a89880' : '#b88848';
+            const stoneDark = state.era === 'rome' ? '#7a6e58' : '#a07030';
+            const stoneY = y - 24 - PYR_BLOCK_H + bob;
+            const stoneX = x - PYR_BLOCK_W / 2;
+            // Bakskugga
+            ctx.fillStyle = 'rgba(80,50,20,0.55)';
+            ctx.fillRect(stoneX + 2, stoneY + 2, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1);
+            // Main (matchar exakt drawBigPyramid)
             ctx.fillStyle = stoneMain;
-            ctx.fillRect(stoneX, stoneY, bw, bh);
-            // Ljusare topp
-            ctx.fillStyle = stoneLight;
-            ctx.fillRect(stoneX, stoneY, bw, 3);
-            // Mörk botten-list
+            ctx.fillRect(stoneX, stoneY, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1);
+            // Bottom-list
             ctx.fillStyle = stoneEdge;
-            ctx.fillRect(stoneX, stoneY + bh - 3, bw, 2);
-            // Mörk höger-kant
+            ctx.fillRect(stoneX, stoneY + PYR_BLOCK_H - 3, PYR_BLOCK_W - 1, 2);
+            // Höger-kant (1 px, inne i blocket)
             ctx.fillStyle = stoneDark;
-            ctx.fillRect(stoneX + bw - 2, stoneY, 2, bh);
-            // Mejsel-spår för karaktär
-            ctx.fillStyle = state.era === 'rome' ? 'rgba(120,110,90,0.35)' : 'rgba(80,40,10,0.35)';
-            ctx.fillRect(stoneX + 3, stoneY + 5, bw - 8, 1);
-            ctx.fillRect(stoneX + 3, stoneY + bh - 7, bw - 10, 1);
-            // (Röd/guld dekor borttagen från bärda stenar — passar bättre med staplarnas
-            //  rena marmor-look och undviker "röd rand" som störde ögat.)
+            ctx.fillRect(stoneX + PYR_BLOCK_W - 2, stoneY, 1, PYR_BLOCK_H - 1);
           }
         }
       }
@@ -16677,7 +18590,9 @@
     state.score = 0;
     state.blocksPlaced = 0;
     state.time = 0;
-    state.dayTime = 0.15;
+    // Starta vid slutet på dagen / början av natt — men med facklor tända
+    // så slavarna arbetar direkt (istället för att springa och tända facklor)
+    state.dayTime = 0.82;
     state.workersDowned = 0;
     state.entranceFade = 0;
     state.scaffoldWood = 0;
@@ -16692,7 +18607,7 @@
     state.animals.length = 0;
     spawnAnimals(3);
     // Återställ facklor — alla släckta och utan tändar-uppdrag
-    for (const t of TORCHES) { t.lit = false; t.assignedTo = null; }
+    for (const t of TORCHES) { t.lit = true; t.assignedTo = null; }   // starta med alla facklor tända
     // Inga pågående bårar-/lintel-uppdrag i ny match
     for (const w of workers) {
       w.bearerOf = w.bearerPartner = w.bearerRole = null;
@@ -16715,6 +18630,7 @@
     levelTransition.phase = null;
     levelTransition.wagons = [];
     applyLevelScale();
+    populateEgyptStart();
     overlay.classList.add('hidden');
     // Slavhandlarna kör in med första kullen slavar på bana 1
     startLevelTransition({ level: 1, slaveCount: TOTAL_WORKERS });
@@ -16826,6 +18742,7 @@
       if (!state.running) startGame();
       state.era = 'rome';
       populateRomeStart();   // ge oss 10 färdiga stenar + tomma molds
+      switchMusicForEraChange();
       overlay.classList.add('hidden');
     });
   }
