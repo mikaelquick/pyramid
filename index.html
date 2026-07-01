@@ -770,6 +770,13 @@
     fallenPieces: [],  // Egypt: sågade bitar som ligger på marken, väntar på att plockas upp
     _pieceIdCounter: 0,
     egyptHoldPile: 0,  // Egypt: stenar som INTE passar just nu (t.ex. under waitingForLintel) — läggs åt sidan så bärare inte tar dem direkt igen. Transfereras till surplus när pyramiden gått framåt.
+    placedSlots: null,   // Set av specifika slot-index som är placerade (för horisontell frihet)
+    shootingStars: [],   // sällsynta stjärnfall på natthimlen
+    // Per-sten spårning: varje sten får ett unikt ID (0,1,2,...) motsvarande dess "mål-slot" i pyramiden
+    stoneCounter: 0,
+    stoneIdsPerPile: {
+      sled0: [], sled1: [], home: [], surplus: [], hold: [],
+    },
     egyptCutPile: 0,   // Egypt: fallback-hög (används inte längre men behålls för äldre save-state)
     egyptSurplus: 0,   // Egypt: överskotts-stenar som lades nära pyramiden (blocket redan använt)
     wagons: [],       // häst-och-vagn med slav-bur som anländer mellan banor
@@ -3106,14 +3113,27 @@
     state.bigBlockReserve = 25;
     state.fallenPieces = [];
     state._pieceIdCounter = 0;
-    // TVÅ slädar båda fulla från start så båda börjar cykla direkt mot pyramiden
+    // TVÅ slädar smart pre-positionerade så bygget kan börja DIREKT
+    // Sled 0: redan vid pyramiden full — bärare kan plocka omedelbart
+    // Sled 1: vid stationen full — startar drag mot pyramiden
     state.stationSleds = [
-      { id: 0, load: 6, capacity: 6, state: 'at-station', x: null, y: null, destX: null, destY: null, stuckTimer: 0 },
+      { id: 0, load: 6, capacity: 6, state: 'at-pyramid', x: null, y: null, destX: null, destY: null, stuckTimer: 0 },
       { id: 1, load: 6, capacity: 6, state: 'at-station', x: null, y: null, destX: null, destY: null, stuckTimer: 0 },
     ];
-    state.stationHomePile = [0];   // en shared hemma-hög (piece collectors levererar hit)
+    state.stationHomePile = [3];   // hemma-högen har 3 så tredje leverans är snabb
     state.egyptCutPile = 0;
     state.dayTime = 0.82;
+    // Per-sten ID tracking: 15 förladdade stenar med ID 0-14
+    state.stoneCounter = 15;
+    state.stoneIdsPerPile = {
+      sled0: [0, 1, 2, 3, 4, 5],
+      sled1: [6, 7, 8, 9, 10, 11],
+      home: [12, 13, 14],
+      surplus: [],
+      hold: [],
+    };
+    // Set av placerade slot-index — för horisontell frihet inom rader
+    state.placedSlots = new Set();
   }
 
   // Sätt upp Rom-startläget: tomma molds + färdig stapel med 10 stenar
@@ -5529,6 +5549,17 @@
       swapPartner: null,                                  // annan slav vi byter kläder med
       swapPhase: null,                                    // 'undress' | 'swap' | 'redress'
       swapTimer: 0,
+      // Ålder (18-40 vid start; åldras ~1 år per 10 min spel-tid, dör naturligt vid 70+)
+      age: 18 + Math.floor(Math.random() * 22),
+      ageProgress: 0,           // små tick tills nästa år
+      naturalDeath: false,      // markerar naturlig död (ingen blodspöl)
+      // Vänner och rivaler — Map worker → styrke-värde 0-100
+      friends: new Map(),
+      rivals: new Map(),
+      // Push/bråk-event
+      fightingTarget: null,
+      fightTimer: 0,
+      fightPhase: null,         // 'shoving' | 'startled' | null
     };
   }
   function spawnWorkers(n) {
@@ -6121,6 +6152,13 @@
     w.lazyTarget = null;
     w.restSpot = w.restZone ? pickRestSpot(w.restZone, w) : null;
     w.atRestZone = false;
+    // Om sharing_food: välj vilken snack (0=bröd, 1=dadel, 2=lök).
+    // Tjocka slavar föredrar bröd, kvinnor får ibland fikon (via seed).
+    if (action === 'sharing_food') {
+      if (w.type === 'fat') w.snackType = Math.random() < 0.7 ? 0 : 1;
+      else if (w.type === 'woman') w.snackType = Math.random() < 0.5 ? 1 : 0;
+      else w.snackType = Math.floor(Math.random() * 3);   // 0/1/2
+    }
     // Om brewery var fullt (returnerade null) — välj annan zon istället
     if (!w.restSpot && action === 'drinking') {
       w.lazyAction = 'sleeping';
@@ -6483,15 +6521,28 @@
   }
 
   function downWorker(w) {
+    // Om slaven bar en sten — släpp den där de föll så den kan plockas upp senare
+    if (w.carrying && state.era === 'egypt' && state.level === 1 && !w.lintelTask) {
+      if (!state.fallenPieces) state.fallenPieces = [];
+      state.fallenPieces.push({
+        id: ++state._pieceIdCounter,
+        x: w.x, y: w.y, vx: 0, vy: 0,
+        resting: true, targetY: w.y,
+        stationIdx: 0, claimedBy: null,
+      });
+    }
+    // Rensa piece-collector-reservation så piecen kan claimas igen
+    if (w.pieceCollectTask) {
+      if (w.pieceCollectTask.claimedBy === w) w.pieceCollectTask.claimedBy = null;
+      w.pieceCollectTask = null; w.pieceCollectPhase = null; w.pieceCollectStation = null;
+    }
     // Räkna mot stämningen i slut-introt — varje pisk-dödning sänker glädjen
     state.workersDowned = (state.workersDowned || 0) + 1;
-    // Markeras för bårar-uppdrag när de övergår till 'downed' senare
     w.needsBearer = true;
-    // Arbetaren börjar falla — kommer sen att övergå till 'downed' efter en sek
     w.state = 'falling';
-    w.fallTimer = 70;  // ~1.2 sek ragdoll-fall
-    w.fallDir = (pharaoh.x > w.x) ? -1 : 1; // faller bort från Farao
-    w.downedFacing = -w.fallDir; // huvudet hamnar bortåt från Farao
+    w.fallTimer = 70;
+    w.fallDir = (pharaoh.x > w.x) ? -1 : 1;
+    w.downedFacing = -w.fallDir;
     w.bloodPool = 0;
     w.carrying = false;
     w.target = null;
@@ -6792,6 +6843,27 @@
 
       // Fackla-tändar-uppdrag har högsta prioritet (när natten faller)
       if (w.torchTask) {
+        // Om slaven bär en sten — släpp den där de är först och släpp torch-uppgiften.
+        // Nästa frame kan de plocka fackla-uppgift på nytt (om den fortfarande behövs).
+        if (w.carrying) {
+          if (state.era === 'egypt' && state.level === 1 && !w.lintelTask) {
+            if (!state.fallenPieces) state.fallenPieces = [];
+            state.fallenPieces.push({
+              id: ++state._pieceIdCounter,
+              x: w.x, y: w.y, vx: 0, vy: 0,
+              resting: true, targetY: w.y,
+              stationIdx: 0, claimedBy: null,
+            });
+          }
+          w.carrying = false;
+          w.reservedSlotIdx = null;
+          w.walkingToHold = false;
+          w.pyramidWaitTimer = 0;
+          if (w.torchTask && w.torchTask.assignedTo === w) w.torchTask.assignedTo = null;
+          w.torchTask = null;
+          w.torchIgniteTimer = 0;
+          continue;
+        }
         const t = w.torchTask;
         if (t.lit || w.state !== 'idle') {
           if (t.assignedTo === w) t.assignedTo = null;
@@ -6862,7 +6934,9 @@
       const distP = Math.hypot(dxp, dyp);
       if (distP < 90 && !inDeepSleep) w.energy = Math.min(100, w.energy + 0.15);
 
-      if (w.energy <= 5 && w.state !== 'lazy') {
+      // Bärande slavar går aldrig lat — de slutför sin leverans först
+      if (w.carrying) w.energy = Math.max(w.energy, 6);
+      if (w.energy <= 5 && w.state !== 'lazy' && !w.carrying) {
         // Om de bär en sten — släpp den där de står så den inte försvinner
         if (w.carrying && state.era === 'rome' && !w.lintelTask) {
           state.extraStones = Math.min(60, (state.extraStones || 0) + 1);
@@ -7432,25 +7506,42 @@
                 state.egyptCutPile = Math.max(0, (state.egyptCutPile || 0) - 1);
                 w.pickingFromEgyptCut = false;
               }
+              // Hjälpfunktion: leta specifikt efter targetStoneId, annars ta första
+              function takeStoneFromPile(arr, targetId) {
+                if (!arr || arr.length === 0) return null;
+                if (targetId != null) {
+                  const idx = arr.indexOf(targetId);
+                  if (idx >= 0) return arr.splice(idx, 1)[0];
+                }
+                return arr.shift();
+              }
               // Om vi plockade från en stations-släde
               if (w.pickingFromSledIdx != null) {
                 const sled = state.stationSleds && state.stationSleds[w.pickingFromSledIdx];
                 if (sled) sled.load = Math.max(0, sled.load - 1);
+                const key = 'sled' + w.pickingFromSledIdx;
+                w.carriedStoneId = takeStoneFromPile(state.stoneIdsPerPile && state.stoneIdsPerPile[key], w.targetStoneId);
                 w.pickingFromSledIdx = null;
               }
-              // Om vi plockade från hemma-högen (sled var borta)
               if (w.pickingFromHomePile != null) {
                 const idx = w.pickingFromHomePile;
                 if (state.stationHomePile) {
                   state.stationHomePile[idx] = Math.max(0, (state.stationHomePile[idx] || 0) - 1);
                 }
+                w.carriedStoneId = takeStoneFromPile(state.stoneIdsPerPile && state.stoneIdsPerPile.home, w.targetStoneId);
                 w.pickingFromHomePile = null;
               }
-              // Om vi plockade från surplus-högen vid pyramiden
               if (w.pickingFromSurplus) {
                 state.egyptSurplus = Math.max(0, (state.egyptSurplus || 0) - 1);
+                w.carriedStoneId = takeStoneFromPile(state.stoneIdsPerPile && state.stoneIdsPerPile.surplus, w.targetStoneId);
                 w.pickingFromSurplus = false;
               }
+              if (w.pickingFromHold) {
+                state.egyptHoldPile = Math.max(0, (state.egyptHoldPile || 0) - 1);
+                w.carriedStoneId = takeStoneFromPile(state.stoneIdsPerPile && state.stoneIdsPerPile.hold, w.targetStoneId);
+                w.pickingFromHold = false;
+              }
+              w.targetStoneId = null;
               // Reservera en pyramid-slot direkt så bäraren inte re-targetar under promenaden
               if (state.era === 'egypt' && state.level === 1 && !w.lintelTask && !w.woodTask) {
                 w.reservedSlotIdx = reserveNextPyramidSlot(w);
@@ -7473,9 +7564,13 @@
           } else {
             // Välj uppgift — lintel (2-pers), sten, eller trä
             if (!w.target) {
-              // Multi-bär: bana 2 = ALLA stenar (4 pers), bana 1 = bara block 30 (2 pers)
+              // Multi-bär: bana 2 = ALLA stenar (4 pers). Bana 1 skippar gang för slot 30 —
+              // istället prioteras sled@station att dra upp den (som en vanlig sten som
+              // renderas 2× bred av pyramid-draw:et). Om ingen sled finns → fallback till gang.
+              const anySledReady = (state.stationSleds || []).some(s =>
+                s.state === 'at-station' && s.load >= 1);
               const needsGang = state.phase === 'building' &&
-                                (state.level === 2 || state.blocksPlaced === 30);
+                                (state.level === 2 || (state.blocksPlaced === 30 && !anySledReady));
               if (needsGang) {
                 const gangSize = state.level === 2 ? 4 : 2;
                 // Hitta leader som behöver fler bärare
@@ -7554,14 +7649,19 @@
                   !o.pieceCollectTask && o.pickingFromHomePile == null
                 ).length;
                 const pyrCap = state.blocksTarget || 55;
-                // Om pyramiden VÄNTAR på en specifik sten (t.ex. lintel) — alla andra vet detta
-                // och plockar inte upp någon sten alls. Bara lintel-gänget kan arbeta.
                 const waitingForLintel = state.blocksPlaced === 30;
-                if (waitingForLintel && !w.lintelTask) { continue; }
+                const lintelGangActive = workers.some(o => o.lintelTask);
+                if (waitingForLintel && !w.lintelTask && lintelGangActive) { continue; }
+                // Reservera slot direkt. Vidare tolerans (+5) så många bärare kan jobba parallellt
+                // — mismatch hanteras med chipping vid placering (visuell mejsling).
                 const nextSlot = reserveNextPyramidSlot(w);
-                const slotAccessible = nextSlot != null && nextSlot <= state.blocksPlaced + 1;
+                const slotAccessible = nextSlot != null && nextSlot <= state.blocksPlaced + 5;
                 const pyramidNeedsMore = state.blocksPlaced + carriersEnRoute < pyrCap && slotAccessible;
-                // Samla alla möjliga plockplatser med tillgänglig last
+                if (pyramidNeedsMore && nextSlot != null) {
+                  w.reservedSlotIdx = nextSlot;
+                  w.targetStoneId = nextSlot;
+                }
+                // Samla alla möjliga plockplatser
                 const candidates = [];
                 if (pyramidNeedsMore) {
                   for (let si = 0; si < (state.stationSleds || []).length; si++) {
@@ -7579,8 +7679,23 @@
                       candidates.push({ type: 'surplus', x: sp.x, y: sp.y + 6 });
                     }
                   }
+                  // Om ingen "normal" källa finns OCH bäraren har försökt förut (fail count > 0),
+                  // ta från hold-högen som sista utväg och mejsla stenen att passa
+                  if (candidates.length === 0 && (w.pickFailCount || 0) >= 1 &&
+                      (state.egyptHoldPile || 0) > 0) {
+                    const reservedHold = workers.filter(o => o.pickingFromHold).length;
+                    if ((state.egyptHoldPile || 0) - reservedHold > 0) {
+                      const sp = egyptHoldPilePos();
+                      candidates.push({ type: 'hold', x: sp.x, y: sp.y + 6 });
+                    }
+                  }
                 }
-                // Välj NÄRMASTE
+                // Räkna miss om vi inte hittade något; nolla när vi hittar
+                if (candidates.length === 0 && pyramidNeedsMore) {
+                  w.pickFailCount = (w.pickFailCount || 0) + 1;
+                } else {
+                  w.pickFailCount = 0;
+                }
                 let best = null, bestD = Infinity;
                 for (const c of candidates) {
                   const d = Math.hypot(w.x - c.x, w.y - c.y);
@@ -7591,6 +7706,9 @@
                   w.target = { x: best.x, y: best.y };
                 } else if (best && best.type === 'surplus') {
                   w.pickingFromSurplus = true;
+                  w.target = { x: best.x, y: best.y };
+                } else if (best && best.type === 'hold') {
+                  w.pickingFromHold = true;
                   w.target = { x: best.x, y: best.y };
                 } else {
                   // RARE fallback: sled saknar-eller-fastnat och hemma-högen är väldigt stor.
@@ -7719,28 +7837,90 @@
           const tx = next.x + (w.x < next.x ? -20 : 20);
           const ty = next.y + 10;
           moveWorkerToward(w, tx, ty);
-          if (dist2(w.x, w.y, tx, ty) < 14) {
-            // Egypt bana 1: om det inte är MIN tur (reservedSlot > blocksPlaced),
-            // läggs stenen på HOLD-högen — separat från surplus så bäraren inte plockar samma igen.
-            // När pyramiden går framåt (t.ex. lintel placerad) transfereras hold → surplus.
-            if (state.era === 'egypt' && state.level === 1 && targetIdx !== state.blocksPlaced) {
+          // Om bäraren redan bestämt att gå till hold-högen — walk-flow
+          if (state.era === 'egypt' && state.level === 1 && w.walkingToHold) {
+            const holdPos = egyptHoldPilePos();
+            moveWorkerToward(w, holdPos.x - 10, holdPos.y + 6);
+            if (dist2(w.x, w.y, holdPos.x - 10, holdPos.y + 6) < 12) {
               state.egyptHoldPile = Math.min(30, (state.egyptHoldPile || 0) + 1);
-              const holdPos = egyptHoldPilePos();
+              // Lägg stenens ID på hold-högen så vi vet vilken det är
+              if (state.stoneIdsPerPile && w.carriedStoneId != null) {
+                state.stoneIdsPerPile.hold.push(w.carriedStoneId);
+              }
+              w.carriedStoneId = null;
               spawnFloater(holdPos.x, holdPos.y - 12, '×', '#c88060');
               w.carrying = false;
               w.reservedSlotIdx = null;
-              w.surplusDropTimer = 180;   // 3s cooldown så denna slav inte tar samma igen direkt
-              continue;
+              w.walkingToHold = false;
+              w.pyramidWaitTimer = 0;
+              w.surplusDropTimer = 240;
+              w.target = null;
             }
-            if (waitingForLintel) continue;
-            state.blocksPlaced++;
+            continue;
+          }
+          if (dist2(w.x, w.y, tx, ty) < 14) {
+            // Egypt bana 1: horisontell frihet — placera vilken oplacerad slot som helst i aktuell rad
+            if (state.era === 'egypt' && state.level === 1) {
+              if (!state.placedSlots) state.placedSlots = new Set();
+              // Föråldrad reservation (slot redan placerad) → hämta ny
+              if (state.placedSlots.has(targetIdx)) {
+                const newSlot = reserveNextPyramidSlot(w);
+                if (newSlot != null) { w.reservedSlotIdx = newSlot; w.pyramidWaitTimer = 0; continue; }
+                // Ingen slot tillgänglig — pyramiden klar? gå ur (surplus drop nedan)
+              } else {
+                // Är slot i aktuell rad? Annars vänta för lägre rader
+                const buildRow = currentBuildableRow();
+                const rowSlots = pyramidRowSlots(buildRow);
+                if (!rowSlots.includes(targetIdx)) {
+                  const newSlot = reserveNextPyramidSlot(w);
+                  if (newSlot != null && newSlot !== targetIdx) {
+                    w.reservedSlotIdx = newSlot;
+                    w.pyramidWaitTimer = 0;
+                    continue;
+                  }
+                  w.pyramidWaitTimer = (w.pyramidWaitTimer || 0) + 1;
+                  continue;
+                }
+              }
+            }
+            w.pyramidWaitTimer = 0;
+            const placedId = w.carriedStoneId;
+            const idMismatch = placedId != null && placedId !== targetIdx;
+            if (state.era === 'egypt' && state.level === 1) {
+              state.placedSlots.add(targetIdx);
+              state.blocksPlaced = state.placedSlots.size;
+            } else {
+              state.blocksPlaced++;
+            }
+            w.carriedStoneId = null;
+            // Om stenens ID inte matchar slot-id:t → mejsla in stenen så den passar.
+            // Extra damm-partiklar + hackning-tecken visar arbetet.
+            if (idMismatch) {
+              for (let i = 0; i < 14; i++) {
+                state.cracks.push({
+                  x: next.x + (Math.random()-0.5) * PYR_BLOCK_W,
+                  y: next.y + (Math.random()-0.5) * PYR_BLOCK_H,
+                  vx: (Math.random()-0.5) * 2.4,
+                  vy: -Math.random() * 1.6 - 0.4,
+                  life: 0.9, color: i < 7 ? '#d4a070' : '#a07840', grav: 0.10,
+                });
+              }
+              spawnFloater(next.x, next.y - 20, `✂ #${placedId}→#${targetIdx}`, '#c8a070');
+            }
             state.score += 10;
             w.carrying = false;
             w.reservedSlotIdx = null;
+            w.target = null;   // nolla target så bärare direkt letar nytt jobb
+            w.targetStoneId = null;
+            w.pyramidWaitTimer = 0;
             // Transferera hold-högen → surplus när pyramiden går framåt (nu passar tidigare avvisade stenar)
             if (state.era === 'egypt' && state.level === 1 && (state.egyptHoldPile || 0) > 0) {
               state.egyptSurplus = Math.min(30, (state.egyptSurplus || 0) + (state.egyptHoldPile || 0));
               state.egyptHoldPile = 0;
+              if (state.stoneIdsPerPile) {
+                state.stoneIdsPerPile.surplus.push(...state.stoneIdsPerPile.hold);
+                state.stoneIdsPerPile.hold = [];
+              }
             }
             spawnFloater(next.x, next.y - 10, '+1', '#fff0a0');
             // Marmordamm när sten sätts på plats i Rom (vitt puder + partiklar)
@@ -7863,6 +8043,9 @@
     updateBigBlock();
     updateRomeEvents();
     updateWhipHelper();
+    updateWorkerLives();   // ålder, vänskap, sällsynta bråk (var 30 frames)
+    updateFightPhysics();  // knuff-fys per frame
+    updateShootingStars();  // sällsynta stjärnfall på natthimlen
 
     // Daytime birds — spawn små flockar då och då när det är ljust
     if (dayPhase > 0.4 && state.birds.length < 18 && Math.random() < 0.006) {
@@ -8762,18 +8945,32 @@
   }
 
   function updateOneSled(sled) {
-    // När släden är HEMMA: dra stenar från hemma-högen upp på släden
+    // När släden är HEMMA: dra stenar från hemma-högen upp på släden (transferera även IDs)
     if (sled.state === 'at-station' && sled.load < sled.capacity) {
-      // Shared home pile — bara idx 0 räknas
       const homePile = state.stationHomePile[0] || 0;
       if (homePile > 0) {
         const take = Math.min(homePile, sled.capacity - sled.load);
         sled.load += take;
         state.stationHomePile[0] = homePile - take;
+        // Transferera IDs från home → sled
+        if (state.stoneIdsPerPile) {
+          const sledKey = 'sled' + sled.id;
+          for (let i = 0; i < take; i++) {
+            const id = state.stoneIdsPerPile.home.shift();
+            if (id != null) state.stoneIdsPerPile[sledKey].push(id);
+          }
+        }
       }
     }
     // Auto-transitioner
     if (sled.state === 'at-station' && sled.load >= sled.capacity) {
+      sled.state = 'awaiting-drag';
+      const dest = stationSledPyramidPos(sled.id);
+      sled.destX = dest.x; sled.destY = dest.y;
+    }
+    // Om vi väntar på lintel-slot (blocksPlaced === 30) och det finns någon last → dra upp DIREKT
+    // så bäraren kan placera slot 30 (renderas 2× bred i pyramiden)
+    if (sled.state === 'at-station' && sled.load > 0 && state.blocksPlaced === 30) {
       sled.state = 'awaiting-drag';
       const dest = stationSledPyramidPos(sled.id);
       sled.destX = dest.x; sled.destY = dest.y;
@@ -8799,11 +8996,16 @@
       const home = stationSledHomePos(sled.id);
       sled.destX = home.x; sled.destY = home.y;
     }
-    // Awaiting-drag (full sled) kräver 2 slavar. Awaiting-return (tom sled) räcker med 1 (långsammare).
+    // Antal slavar som krävs:
+    // - Full sled (load >= 4) på väg till pyramiden: 2 slavar
+    // - Partial sled (load 1-3) på väg dit: 1 slav räcker (långsam), snabbare med fler
+    // - Tom sled på väg tillbaka: 1 slav räcker
     if (sled.state === 'awaiting-drag' || sled.state === 'awaiting-return') {
       sled.stuckTimer = (sled.stuckTimer || 0) + 1;
       const draggers = workers.filter(w => w.sledDragTask && w.sledDragSled === sled);
-      const minNeeded = sled.state === 'awaiting-return' ? 1 : 2;
+      let minNeeded = 2;
+      if (sled.state === 'awaiting-return') minNeeded = 1;                    // tom → 1 räcker
+      else if (sled.load > 0 && sled.load < 4) minNeeded = 1;                // liten last → 1 räcker
       let inPlace = 0;
       for (const w of draggers) {
         const slot = sledDraggerSlotPos(w.sledDragSlot || 0, sled);
@@ -8848,6 +9050,176 @@
           w.target = null;
           assignUrgentEgyptTaskTo(w);
         }
+      }
+    }
+  }
+
+  // Slavarnas liv: åldrande, vänskap växer med tiden, sällsynta bråk/knuffar
+  function updateWorkerLives() {
+    // Kör bara var 30:e frame för att spara CPU
+    if (state.time % 30 !== 0) return;
+    for (const w of workers) {
+      if (w.state === 'downed' || w.state === 'falling') continue;
+      // ÅLDER: 1 år per ~30 minuter spel-tid (mycket långsammare)
+      // 30*30 frames = ~15s → progress = 1/120 (1 år per 120*15s = 30 min)
+      w.ageProgress = (w.ageProgress || 0) + (1/120);
+      if (w.ageProgress >= 1) {
+        w.ageProgress = 0;
+        w.age = (w.age || 25) + 1;
+        if (w.age === 60) {
+          w.speedMul = (w.speedMul || 1) * 0.9;
+          spawnChatBubble(w, '𓎡');
+        }
+        if (w.age === 75) {
+          w.speedMul = (w.speedMul || 1) * 0.9;
+        }
+        // Naturlig död — mycket sällsynt, bara efter 80+
+        if (w.age >= 80) {
+          const deathChance = (w.age - 80) * 0.005;   // 0.5% per år över 80
+          if (Math.random() < deathChance) {
+            w.hp = 0;
+            w.state = 'downed';
+            w.naturalDeath = true;
+            w.needsBearer = true;                     // så bårar-slavar kommer och hämtar
+            w.downedTimer = 999;
+            spawnFloater(w.x, w.y - 30, '𓊫', '#a0a0c0');
+            continue;
+          }
+        }
+      }
+      // VÄNSKAP: växer när slavar är nära varandra
+      if (Math.random() < 0.15 && !w.friends) w.friends = new Map();
+      if (Math.random() < 0.15) {
+        for (const o of workers) {
+          if (o === w || o.state === 'downed') continue;
+          const d = Math.hypot(o.x - w.x, o.y - w.y);
+          if (d < 28) {
+            if (!w.friends) w.friends = new Map();
+            const cur = w.friends.get(o) || 0;
+            w.friends.set(o, Math.min(100, cur + 1));
+            if (!o.friends) o.friends = new Map();
+            const cur2 = o.friends.get(w) || 0;
+            o.friends.set(w, Math.min(100, cur2 + 1));
+          }
+        }
+      }
+      // BRÅK: mycket sällsynt (0.005% chans per tick) — bara idle slavar utan uppdrag
+      const canFight = w.state === 'idle' && !w.carrying && !w.bearerOf &&
+                       !w.torchTask && !w.woodTask && !w.lintelTask && !w.crankTask &&
+                       !w.sledTask && !w.sawerTask && !w.waterPourerTask &&
+                       !w.sledDragTask && !w.pieceCollectTask &&
+                       !w.fightingTarget && w.scared < 0.5;
+      if (canFight && Math.random() < 0.0002) {
+        const nearby = workers.filter(o =>
+          o !== w && !o.fightingTarget && !o.carrying && !o.bearerOf &&
+          o.state === 'idle' && o.state !== 'downed' &&
+          Math.hypot(o.x - w.x, o.y - w.y) < 40
+        );
+        if (nearby.length > 0) {
+          const target = nearby[Math.floor(Math.random() * nearby.length)];
+          w.fightingTarget = target;
+          w.fightPhase = 'shoving';
+          w.fightTimer = 90;   // 1.5 sek
+          target.fightingTarget = w;
+          target.fightPhase = 'startled';
+          target.fightTimer = 90;
+          target.scared = 0.6;
+          spawnChatBubble(w, '!');
+        }
+      }
+    }
+    // Kör fight-timers varje tick (inte var 30)
+  }
+  // Sällsynta stjärnfall — bara på natten, väldigt sällan
+  function updateShootingStars() {
+    if (!state.shootingStars) state.shootingStars = [];
+    const dayPhase = getDayPhase();   // 0=natt, 1=dag
+    // Bara på natten (dayPhase < 0.3) och väldigt sällan
+    if (dayPhase < 0.3 && state.shootingStars.length === 0 && Math.random() < 0.00015) {
+      // Spawn en stjärnfall
+      const startX = Math.random() * W;
+      const startY = 20 + Math.random() * 80;
+      const angle = 0.4 + Math.random() * 0.4;   // sneda snett nedåt-höger
+      const speed = 5 + Math.random() * 3;
+      state.shootingStars.push({
+        x: startX, y: startY,
+        vx: Math.cos(angle) * speed,
+        vy: Math.sin(angle) * speed,
+        life: 1.0,
+        trail: [],
+      });
+    }
+    // Uppdatera aktiva stjärnfall
+    for (const s of state.shootingStars) {
+      s.trail.push({ x: s.x, y: s.y });
+      if (s.trail.length > 20) s.trail.shift();
+      s.x += s.vx;
+      s.y += s.vy;
+      s.life -= 0.008;
+    }
+    state.shootingStars = state.shootingStars.filter(s => s.life > 0 && s.x < W + 50 && s.y < H);
+  }
+
+  // Rita stjärnfall (trail + huvud)
+  function drawShootingStars() {
+    if (!state.shootingStars || state.shootingStars.length === 0) return;
+    for (const s of state.shootingStars) {
+      // Trail — fadar från transparent till stjärna-vit
+      for (let i = 0; i < s.trail.length; i++) {
+        const t = i / s.trail.length;
+        const p = s.trail[i];
+        const alpha = t * s.life * 0.8;
+        ctx.fillStyle = `rgba(255,240,200,${alpha})`;
+        ctx.beginPath();
+        ctx.arc(p.x, p.y, 1 + t * 1.5, 0, Math.PI * 2);
+        ctx.fill();
+      }
+      // Huvudet — ljust vit
+      ctx.fillStyle = `rgba(255,250,220,${s.life})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      // Glöd runt huvudet
+      ctx.fillStyle = `rgba(255,240,180,${s.life * 0.3})`;
+      ctx.beginPath();
+      ctx.arc(s.x, s.y, 5, 0, Math.PI * 2);
+      ctx.fill();
+    }
+  }
+
+  // Bråk-fys per frame (kort men behöver köras varje tick för smoothness)
+  function updateFightPhysics() {
+    for (const w of workers) {
+      if (!w.fightingTarget) continue;
+      const t = w.fightingTarget;
+      if (!t || t.hp <= 0 || t.state === 'downed') {
+        w.fightingTarget = null; w.fightPhase = null; w.fightTimer = 0;
+        continue;
+      }
+      w.fightTimer--;
+      if (w.fightTimer <= 0) {
+        // Klart — släpp
+        w.fightingTarget = null;
+        w.fightPhase = null;
+        continue;
+      }
+      // Knuff — angripare puttar target åt sitt håll
+      if (w.fightPhase === 'shoving') {
+        const dx = t.x - w.x, dy = t.y - w.y;
+        const d = Math.hypot(dx, dy);
+        if (d > 0 && d < 30) {
+          // Puttar tar-get bort
+          t.x += (dx/d) * 0.5;
+          // Occasional dust
+          if (state.time % 6 === 0) {
+            state.cracks.push({
+              x: t.x, y: t.y + 2,
+              vx: (Math.random()-0.5)*1.2, vy: -Math.random()*0.6,
+              life: 0.4, color: '#c89870', grav: 0.1,
+            });
+          }
+        }
+        w.facing = dx > 0 ? 1 : -1;
       }
     }
   }
@@ -8930,9 +9302,8 @@
       w.target = null;
       return;
     }
-    // Fallback: promenera mot stations-området
-    const p = stationSledHomePos(0);
-    w.target = { x: p.x + (Math.random()-0.5)*10, y: p.y + 4 };
+    // Ingen akut uppgift — stå still där de är så natural bearer-AI kan hämta dem nästa frame
+    w.target = null;
   }
 
   // Räkna hur många akuta Egypt-slots som behöver arbetare just nu
@@ -9199,8 +9570,9 @@
         w.facing = dx > 0 ? 1 : -1;
         w.walkPhase += 0.24;
       } else {
-        // Plocka upp
+        // Plocka upp — behåll stenens ID
         w.x = piece.x; w.y = piece.y;
+        w.carriedStoneId = piece.stoneId != null ? piece.stoneId : state.stoneCounter++;
         const idx = state.fallenPieces.indexOf(piece);
         if (idx >= 0) state.fallenPieces.splice(idx, 1);
         w.carrying = true;
@@ -9233,17 +9605,26 @@
         w.facing = dx > 0 ? 1 : -1;
         w.walkPhase += 0.22;
       } else {
-        // Om release-läget hunnit ändras (t.ex. släde precis blev full) — kolla om
+        // Lägg stenens ID på destinationen
+        const stoneId = w.carriedStoneId;
         if (sled && sled.state === 'at-station' && sled.load < sled.capacity) {
           sled.load = Math.min(sled.capacity, sled.load + 1);
+          if (state.stoneIdsPerPile && stoneId != null) {
+            state.stoneIdsPerPile['sled' + stationIdx].push(stoneId);
+          }
         } else {
           if (!state.stationHomePile) state.stationHomePile = [0];
           state.stationHomePile[stationIdx] = (state.stationHomePile[stationIdx] || 0) + 1;
+          if (state.stoneIdsPerPile && stoneId != null) {
+            state.stoneIdsPerPile.home.push(stoneId);
+          }
         }
+        w.carriedStoneId = null;
         w.carrying = false;
         w.pieceCollectTask = null;
         w.pieceCollectPhase = null;
         w.pieceCollectStation = null;
+        w.target = null;   // nolla target direkt så nästa frame hittar ny uppgift
         spawnFloater(dest.x, dest.y - 12, '+I', '#c89870');
       }
       return true;
@@ -9331,14 +9712,16 @@
           bb.x += PYR_BLOCK_W / 2;
           // Skapa en fallande bit — den skiljs av och tippar av vänster kant
           if (!state.fallenPieces) state.fallenPieces = [];
+          const newStoneId = state.stoneCounter++;
           state.fallenPieces.push({
             id: ++state._pieceIdCounter,
+            stoneId: newStoneId,
             x: pieceCenterX,
             y: pieceCenterY,
-            vx: -1.2,   // åker åt vänster (tippar av bänken)
-            vy: -1.2,   // liten pop uppåt
+            vx: -1.2,
+            vy: -1.2,
             resting: false,
-            targetY: bb.y + 22,   // hamnar på marken bredvid bänken
+            targetY: bb.y + 22,
             stationIdx: bb.stationIdx,
             claimedBy: null,
           });
@@ -9392,8 +9775,8 @@
     const pyrCap = state.blocksTarget || 55;
     const remaining = pyrCap - state.blocksPlaced;
     const totalOutside = countStonesOutsidePyramid();
-    if (totalOutside + carriersEnRoute >= remaining) return;
-    if (totalOutside >= 8) return;   // överflöd — alla ska bygga istället
+    // Stoppar bara om vi redan har tillräckligt för hela pyramiden
+    if (state.blocksPlaced + totalOutside + carriersEnRoute >= pyrCap) return;
     const candidates = state.bigBlocks.filter(b =>
       (b.state === 'in-quarry' || b.state === 'gathering') && b.stationIdx != null);
     if (candidates.length === 0) return;
@@ -9487,20 +9870,41 @@
     return true;
   }
 
-  // Reservera nästa lediga pyramid-slot för en bärare, så flera bärare inte alla springer
-  // mot samma slot och blir förvirrade när någon annan hinner först.
+  // Hjälpfunktioner för radbaserad byggning (horisontell frihet)
+  function pyramidRowSlots(row) {
+    let cum = 0;
+    for (let r = 0; r < row; r++) cum += PYR_ROWS - r;
+    const inRow = PYR_ROWS - row;
+    const arr = [];
+    for (let i = 0; i < inRow; i++) arr.push(cum + i);
+    return arr;
+  }
+  function currentBuildableRow() {
+    const placed = state.placedSlots || new Set();
+    for (let r = 0; r < PYR_ROWS; r++) {
+      const slots = pyramidRowSlots(r);
+      if (!slots.every(s => placed.has(s))) return r;
+    }
+    return PYR_ROWS;
+  }
+
+  // Reservera nästa lediga slot i AKTUELL rad (horisontell frihet — vilken ordning som helst)
   function reserveNextPyramidSlot(w) {
     if (state.era !== 'egypt' || state.level !== 1) return null;
+    if (!state.placedSlots) state.placedSlots = new Set();
     const reserved = new Set();
     for (const o of workers) {
       if (o !== w && o.reservedSlotIdx != null) reserved.add(o.reservedSlotIdx);
     }
-    let idx = state.blocksPlaced;
-    const cap = state.blocksTarget || 55;
-    while (idx < cap) {
-      if (idx === 30 && !w.lintelTask) { idx++; continue; }   // hoppa över lintel-slot
-      if (!reserved.has(idx)) return idx;
-      idx++;
+    const row = currentBuildableRow();
+    if (row >= PYR_ROWS) return null;
+    const slots = pyramidRowSlots(row);
+    const lintelGangActive = workers.some(o => o.lintelTask && o.lintelTargetIdx === 30);
+    for (const s of slots) {
+      if (state.placedSlots.has(s)) continue;
+      if (reserved.has(s)) continue;
+      if (s === 30 && !w.lintelTask && lintelGangActive) continue;
+      return s;
     }
     return null;
   }
@@ -9519,8 +9923,12 @@
   function assignSawers() {
     if (state.era !== 'egypt' || state.level !== 1) return;
     if (!state.bigBlocks) return;
-    // Om det redan finns 10+ stenar väntande — hoppa över, alla ska bygga
-    if (countStonesOutsidePyramid() >= 6) return;
+    // Sluta såga när det finns tillräckligt (redan placerade + väntande >= mål)
+    const pyrCap = state.blocksTarget || 55;
+    const total = state.blocksPlaced + countStonesOutsidePyramid();
+    if (total >= pyrCap) return;
+    // Om det redan finns 6+ stenar väntande — hoppa över, alla ska bygga
+    // Ingen artificiell "abundance"-paus — stoppar bara när total = mål (assignSawers har den checken)
     for (const bb of state.bigBlocks) {
       if (bb.state !== 'at-cutting' && bb.state !== 'being-cut') continue;
       const sled = state.stationSleds[bb.stationIdx];
@@ -9575,7 +9983,7 @@
   function assignWaterPourer() {
     if (state.era !== 'egypt' || state.level !== 1) return;
     if (!state.bigBlocks) return;
-    if (countStonesOutsidePyramid() >= 6) return;   // pausa vid överflöd
+    // Ingen artificiell "abundance"-paus — stoppar bara när total = mål (assignSawers har den checken)   // pausa vid överflöd
     for (const bb of state.bigBlocks) {
       if (bb.state !== 'at-cutting' && bb.state !== 'being-cut') continue;
       const sled = state.stationSleds[bb.stationIdx];
@@ -10048,6 +10456,164 @@
     ctx.textBaseline = 'alphabetic';
   }
 
+  // Namn för specifika pyramid-slots (debug) — hieroglyf + läsbart namn + siffra
+  function pyramidSlotName(idx) {
+    if (idx === 4)  return `𓉑 pelare #${idx}`;
+    if (idx === 5)  return `𓉑 pelare #${idx}`;
+    if (idx === 14) return `𓉐 ingång #${idx}`;
+    if (idx === 22) return `𓉑 pelare #${idx}`;
+    if (idx === 23) return `𓉑 pelare #${idx}`;
+    if (idx === 30) return `𓉐𓉐 LINTEL #${idx}`;
+    return `𓊨 standard #${idx}`;
+  }
+
+  // DEBUG: lys upp alla tillgängliga stenar (utanför pyramiden)
+  // LILA = matchar nästa slot (kan användas direkt)
+  // GRÅ = matchar inte just nu (t.ex. under waitingForLintel)
+  // RÖD = hold-hög (låst tills pyramiden går framåt)
+  function drawDebugStoneAvailability() {
+    if (!document.documentElement.classList.contains('debug')) return;
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    const pulse = 0.5 + 0.5 * Math.sin(state.time * 0.14);
+    const glowAlpha = 0.4 + 0.3 * pulse;
+    // Nästa slot behöver lintel? Då matchar inga vanliga stenar
+    const nextIdx = state.blocksPlaced;
+    const nextIsLintel = nextIdx === 30;
+    // Match-färg: grön om stenarna passar (icke-lintel slot). Annars ingen glöd.
+    // Alla cut-stenar är standard-storlek (mekaniskt) → de matchar alla slots utom lintel.
+    const stonesMatch = !nextIsLintel;
+    const matchR = 80;
+    const matchG = 255;
+    const matchB = 80;
+    ctx.save();
+    // Visa vilken sten som saknas härnäst — placerad ovanför pyramiden
+    const pyrCap = state.blocksTarget || 55;
+    if (nextIdx < pyrCap) {
+      const name = pyramidSlotName(nextIdx);
+      const isLintel = nextIdx === 30;
+      // Rubrik: slot-namn med hieroglyf + läsbar text + siffra
+      const label = name;
+      // Undertext: framsteg
+      const sub = `${state.blocksPlaced}/${pyrCap} stenar`;
+      const accentR = isLintel ? 255 : 180;
+      const accentG = isLintel ? 180 : 80;
+      const accentB = isLintel ? 80  : 220;
+      const boxW = 220, boxH = 36;
+      const boxX = PYR_BASE_X - boxW/2;
+      const boxY = PYR_BASE_Y - PYR_ROWS * PYR_BLOCK_H - 48;
+      ctx.fillStyle = 'rgba(20,20,30,0.75)';
+      ctx.fillRect(boxX, boxY, boxW, boxH);
+      ctx.strokeStyle = `rgba(${accentR},${accentG},${accentB},${0.6 + 0.4 * pulse})`;
+      ctx.lineWidth = 1.5;
+      ctx.strokeRect(boxX, boxY, boxW, boxH);
+      ctx.fillStyle = `rgb(${accentR},${accentG},${accentB})`;
+      ctx.font = 'bold 14px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(label, PYR_BASE_X, boxY + 15);
+      ctx.fillStyle = '#c0b0d0';
+      ctx.font = 'bold 11px monospace';
+      ctx.fillText(sub, PYR_BASE_X, boxY + 30);
+      ctx.textAlign = 'left';
+      // Pil ner mot pyramiden
+      ctx.strokeStyle = `rgb(${accentR},${accentG},${accentB})`;
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.moveTo(PYR_BASE_X, boxY + boxH);
+      ctx.lineTo(PYR_BASE_X, boxY + boxH + 8);
+      ctx.moveTo(PYR_BASE_X - 3, boxY + boxH + 5);
+      ctx.lineTo(PYR_BASE_X, boxY + boxH + 8);
+      ctx.lineTo(PYR_BASE_X + 3, boxY + boxH + 5);
+      ctx.stroke();
+    }
+    // Hjälp-funktion: rita glöd runt en punkt — grön om stenarna matchar nästa slot
+    function glowAt(x, y, w, h, label) {
+      if (!stonesMatch) return;   // ingen glöd om stenarna inte passar (t.ex. lintel behövs)
+      ctx.fillStyle = `rgba(${matchR},${matchG},${matchB},${glowAlpha * 0.18})`;
+      ctx.fillRect(x - 4, y - 4, w + 8, h + 8);
+      ctx.strokeStyle = `rgba(${matchR},${matchG},${matchB},${glowAlpha})`;
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(x - 1, y - 1, w + 2, h + 2);
+      if (label) {
+        ctx.fillStyle = '#a0ff80';
+        ctx.font = 'bold 9px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(label, x + w/2, y - 4);
+        ctx.textAlign = 'left';
+      }
+    }
+    // Bara en sten lyser: den vars stoneId === state.blocksPlaced (den EXAKTA matchningen)
+    // Om den stenen inte finns någonstans så syns ingen glöd — då vet du att den saknas
+    const targetId = state.blocksPlaced;
+    let highlighted = false;
+    const ids = state.stoneIdsPerPile || {};
+    function highlightIfMatch(idsArr, px, py, w, h, labelPrefix) {
+      if (highlighted) return;
+      if (!idsArr) return;
+      const foundIdx = idsArr.indexOf(targetId);
+      if (foundIdx < 0) return;
+      glowAt(px, py, w, h, `${labelPrefix} #${targetId} (${foundIdx === 0 ? 'top' : 'djup ' + foundIdx})`);
+      highlighted = true;
+    }
+    if (stonesMatch) {
+      // 1. Sled@pyramid
+      for (const sled of state.stationSleds || []) {
+        if (sled.state !== 'at-pyramid' || sled.load <= 0) continue;
+        const px = sled.x - PYR_BLOCK_W/2 + 2;
+        const py = sled.y - 6 - (sled.load - 1) * 2 - PYR_BLOCK_H;
+        highlightIfMatch(ids['sled' + sled.id], px, py, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1, `sled#${sled.id}`);
+      }
+      // 2. Surplus
+      if ((state.egyptSurplus || 0) > 0) {
+        const sp = egyptSurplusPilePos();
+        highlightIfMatch(ids.surplus, sp.x - PYR_BLOCK_W/2, sp.y - PYR_BLOCK_H, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1, 'surplus');
+      }
+      // 3. Sled@station
+      for (const sled of state.stationSleds || []) {
+        if (sled.state !== 'at-station' || sled.load <= 0) continue;
+        const px = sled.x - PYR_BLOCK_W/2 + 2;
+        const py = sled.y - 6 - (sled.load - 1) * 2 - PYR_BLOCK_H;
+        highlightIfMatch(ids['sled' + sled.id], px, py, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1, `sled#${sled.id}`);
+      }
+      // 4. Home pile
+      const homeLoad = (state.stationHomePile || [])[0] || 0;
+      if (homeLoad > 0) {
+        const hp = stationHomePilePos(0);
+        highlightIfMatch(ids.home, hp.x - PYR_BLOCK_W/2, hp.y - PYR_BLOCK_H, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1, 'hem');
+      }
+      // 5. Fallna bitar
+      for (const p of (state.fallenPieces || [])) {
+        if (highlighted) break;
+        if (p.resting && p.stoneId === targetId) {
+          glowAt(p.x - PYR_BLOCK_W/2, p.y - PYR_BLOCK_H/2, PYR_BLOCK_W, PYR_BLOCK_H, `fallen #${targetId}`);
+          highlighted = true;
+        }
+      }
+      // 6. Om den behövda stenen INTE finns någonstans — visa varning
+      if (!highlighted) {
+        ctx.fillStyle = `rgba(255,80,80,${glowAlpha * 0.4})`;
+        ctx.font = 'bold 11px monospace';
+        ctx.textAlign = 'center';
+        ctx.fillText(`⚠ sten #${targetId} SAKNAS`, PYR_BASE_X, PYR_BASE_Y - PYR_ROWS * PYR_BLOCK_H - 60);
+        ctx.textAlign = 'left';
+      }
+    }
+    // Hold-högen alltid RÖD så det syns att den är låst (oavsett match)
+    if ((state.egyptHoldPile || 0) > 0) {
+      const hp = egyptHoldPilePos();
+      ctx.fillStyle = `rgba(255,80,80,${glowAlpha * 0.15})`;
+      ctx.fillRect(hp.x - 34, hp.y - 24, 68, 32);
+      ctx.strokeStyle = `rgba(255,80,80,${glowAlpha})`;
+      ctx.lineWidth = 1.2;
+      ctx.strokeRect(hp.x - 31, hp.y - 22, 62, 28);
+      ctx.fillStyle = '#ff8080';
+      ctx.font = 'bold 9px monospace';
+      ctx.textAlign = 'center';
+      ctx.fillText(`skräp: ${state.egyptHoldPile}`, hp.x, hp.y - 26);
+      ctx.textAlign = 'left';
+    }
+    ctx.restore();
+  }
+
   // Rita fallande / vilande bitar som väntar på att plockas upp
   function drawFallenPieces() {
     if (state.era !== 'egypt' || state.level !== 1) return;
@@ -10126,15 +10692,19 @@
     if (n <= 0) return;
     const bw = PYR_BLOCK_W - 1;
     const bh = PYR_BLOCK_H - 1;
-    // Två i botten-raden, ovanpå en, osv. Kapacitet 6 = 3+2+1 (trekantig stack)
+    // Kolla om lintel-stenen (id 30) ligger på denna sled — ritas då som EN lång sten ovanpå
+    const sledIds = (state.stoneIdsPerPile && state.stoneIdsPerPile['sled' + idx]) || [];
+    const hasLintel = sledIds.includes(30);
+    // Normala stenar (undanta lintel — den ritas separat överst)
+    const normalCount = n - (hasLintel ? 1 : 0);
     function capForRow(r) { return r < 1 ? 3 : r < 2 ? 2 : 1; }
     let placed = 0;
     let row = 0;
-    let baseY = s.y - sledH + 2 - bh;   // ovanpå slädens platta
-    while (placed < n && row < 6) {
+    let baseY = s.y - sledH + 2 - bh;
+    while (placed < normalCount && row < 6) {
       const cols = capForRow(row);
       const rowW = cols * bw + (cols - 1) * 2;
-      for (let c = 0; c < cols && placed < n; c++) {
+      for (let c = 0; c < cols && placed < normalCount; c++) {
         const seed = (placed * 71 + row * 13 + idx * 5) | 0;
         const dx = ((seed >> 3) & 3) - 1.5;
         const tilt = (((seed >> 7) & 7) - 3) * 0.005;
@@ -10144,16 +10714,12 @@
         ctx.translate(bx + bw / 2, by + bh);
         ctx.rotate(tilt);
         ctx.translate(-(bx + bw / 2), -(by + bh));
-        // Bakskugga
         ctx.fillStyle = 'rgba(80,50,20,0.55)';
         ctx.fillRect(bx + 2, by + 2, bw, bh);
-        // Main
         ctx.fillStyle = '#d8b070';
         ctx.fillRect(bx, by, bw, bh);
-        // Bottom-list
         ctx.fillStyle = '#b88848';
         ctx.fillRect(bx, by + bh - 3, bw, 2);
-        // Höger-kant
         ctx.fillStyle = '#a07030';
         ctx.fillRect(bx + bw - 2, by, 1, bh);
         ctx.restore();
@@ -10161,7 +10727,29 @@
       }
       row++;
     }
-
+    // Om lintel-stenen finns → rita den överst som en LÅNG (2× bred) sten
+    if (hasLintel) {
+      const lintelW = 2 * PYR_BLOCK_W - 2;
+      const lintelH = PYR_BLOCK_H - 1;
+      const topRowY = baseY + (bh + 2) * (-row);
+      const lx = s.x - lintelW / 2;
+      const ly = topRowY;
+      // Bakskugga
+      ctx.fillStyle = 'rgba(80,50,20,0.55)';
+      ctx.fillRect(lx + 2, ly + 2, lintelW, lintelH);
+      // Main body (samma färg som pyramid-lintel)
+      ctx.fillStyle = '#d8b070';
+      ctx.fillRect(lx, ly, lintelW, lintelH);
+      // Bottom-list
+      ctx.fillStyle = '#b88848';
+      ctx.fillRect(lx, ly + lintelH - 3, lintelW, 2);
+      // Höger-kant
+      ctx.fillStyle = '#a07030';
+      ctx.fillRect(lx + lintelW - 2, ly, 1, lintelH);
+      // Liten "LINTEL"-markering (subtil mörkare mittstreck så det ser ut som en enda lång sten)
+      ctx.fillStyle = 'rgba(90,60,20,0.25)';
+      ctx.fillRect(lx + lintelW/2 - 0.5, ly + 2, 1, lintelH - 5);
+    }
   }
 
   // Rita cut-högen (färdiga sten-block staplade) — legacy, nu tomt eftersom vi använder släder
@@ -11345,6 +11933,7 @@
       drawFallenPieces();
       drawEgyptSurplusPile();
       drawEgyptHoldPile();
+      drawDebugStoneAvailability();
     }
 
     // Workers + pharaoh + animals sorted by y
@@ -11536,6 +12125,9 @@
 
     // Birds (i bakgrunden, ovanför moln/dyner)
     for (const b of state.birds) drawBird(b);
+
+    // Stjärnfall — spelas bara i bakgrund men syns ovanför horisonten
+    drawShootingStars();
 
     // Crows
     for (const c of state.crows) drawCrow(c);
@@ -15212,7 +15804,7 @@
     ctx.stroke();
 
     // Ingångens mörka interiör — fade in först när hela ingången är byggd (efter lintel-stenen)
-    if (state.blocksPlaced > 30) {
+    if ((state.placedSlots && state.placedSlots.has(30)) || state.blocksPlaced > 30) {
       // Räkna upp fade-counter (1 i taget per frame) tills full opacitet
       state.entranceFade = Math.min(120, (state.entranceFade || 0) + 1);
       const alpha = (state.entranceFade / 120) * 0.95;
@@ -15229,10 +15821,14 @@
       const dy = -10 * (1 - tProg) * Math.cos(tProg * Math.PI * 1.6);
       return dy;
     }
-    for (let i = 0; i < state.blocksPlaced; i++) {
+    // Egypt bana 1: iterera över placerade slot-Set (horisontell frihet)
+    // Andra: iterera 0 → blocksPlaced sekventiellt (bakåtkomp)
+    const usePlacedSet = state.era === 'egypt' && state.level === 1 && state.placedSlots;
+    const iterIds = usePlacedSet ? [...state.placedSlots].sort((a, b) => a - b) : Array.from({length: state.blocksPlaced}, (_, i) => i);
+    for (const i of iterIds) {
       if (i === 30) continue;  // Bred lintel ritas sist (täcker över grannblocken)
       const p = pyramidBlockPos(i);
-      if (!p) break;
+      if (!p) continue;
       const dy = settleOffset(i);
       // Smala pelare på rad 0 (block 4, 5) och rad 2 (block 22, 23)
       if (i === 4 || i === 22) { drawEntrancePillar({x: p.x, y: p.y + dy}, 'left'); continue; }
@@ -15258,7 +15854,7 @@
     }
 
     // Bred lintel-sten — dubbel bredd så den vilar på pelartopparna (gravitationskorrekt)
-    if (state.blocksPlaced > 30) {
+    if ((state.placedSlots && state.placedSlots.has(30)) || state.blocksPlaced > 30) {
       const p = pyramidBlockPos(30);
       if (p) {
         const wideW = 2 * PYR_BLOCK_W;
@@ -17734,24 +18330,28 @@
           ctx.stroke();
         } else {
           {
-            // Sten ovan huvudet — EXAKT samma rect-koordinater som drawBigPyramid
+            // Om bäraren har lintel-stenen (id 30) → rita 2× bred som en lång sten
+            const isLintel = w.carriedStoneId === 30;
+            const bwCarry = isLintel ? (2 * PYR_BLOCK_W - 2) : (PYR_BLOCK_W - 1);
+            const bhCarry = PYR_BLOCK_H - 1;
             const stoneMain = state.era === 'rome' ? '#e8dcc4' : '#d8b070';
             const stoneEdge = state.era === 'rome' ? '#a89880' : '#b88848';
             const stoneDark = state.era === 'rome' ? '#7a6e58' : '#a07030';
             const stoneY = y - 24 - PYR_BLOCK_H + bob;
-            const stoneX = x - PYR_BLOCK_W / 2;
-            // Bakskugga
+            const stoneX = x - bwCarry / 2;
             ctx.fillStyle = 'rgba(80,50,20,0.55)';
-            ctx.fillRect(stoneX + 2, stoneY + 2, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1);
-            // Main (matchar exakt drawBigPyramid)
+            ctx.fillRect(stoneX + 2, stoneY + 2, bwCarry, bhCarry);
             ctx.fillStyle = stoneMain;
-            ctx.fillRect(stoneX, stoneY, PYR_BLOCK_W - 1, PYR_BLOCK_H - 1);
-            // Bottom-list
+            ctx.fillRect(stoneX, stoneY, bwCarry, bhCarry);
             ctx.fillStyle = stoneEdge;
-            ctx.fillRect(stoneX, stoneY + PYR_BLOCK_H - 3, PYR_BLOCK_W - 1, 2);
-            // Höger-kant (1 px, inne i blocket)
+            ctx.fillRect(stoneX, stoneY + PYR_BLOCK_H - 3, bwCarry, 2);
             ctx.fillStyle = stoneDark;
-            ctx.fillRect(stoneX + PYR_BLOCK_W - 2, stoneY, 1, PYR_BLOCK_H - 1);
+            ctx.fillRect(stoneX + bwCarry - 1, stoneY, 1, bhCarry);
+            // Diskret mittdelning för lintel (så det syns som EN enda lång sten)
+            if (isLintel) {
+              ctx.fillStyle = 'rgba(90,60,20,0.2)';
+              ctx.fillRect(stoneX + bwCarry/2 - 0.5, stoneY + 2, 1, bhCarry - 4);
+            }
           }
         }
       }
@@ -17940,10 +18540,12 @@
           ctx.fillRect(d2x + 1, d2y + 0.5, 0.5, 0.5);
         }
         else if (w.lazyAction === 'sharing_food') {
-          // Håller ett bröd/bröddkant i utsträckt hand
+          // Snack-typ: 0 = bröd, 1 = dadel, 2 = lök
+          const snack = w.snackType != null ? w.snackType : 0;
+          const chewCycle = Math.floor((state.time + (w.walkPhase * 60)) / 40) % 4;   // tugg-cykel
           const off = Math.sin(state.time * 0.06 + w.walkPhase) * 1;
           const bX = x + 10, bY = y - 5 + bob + off;
-          // Arm sträckt ut
+          // Arm sträckt ut mot maten
           ctx.strokeStyle = w.skin;
           ctx.lineWidth = 2.5;
           ctx.lineCap = 'round';
@@ -17952,22 +18554,60 @@
           ctx.lineTo(bX, bY);
           ctx.stroke();
           ctx.lineCap = 'butt';
-          // Bröd (rund gyllenbrun form)
-          ctx.fillStyle = '#c89060';
-          ctx.beginPath();
-          ctx.ellipse(bX, bY, 3, 2, 0, 0, Math.PI * 2);
-          ctx.fill();
-          // Mörk kant
-          ctx.strokeStyle = '#7a4818';
-          ctx.lineWidth = 0.6;
-          ctx.beginPath();
-          ctx.ellipse(bX, bY, 3, 2, 0, 0, Math.PI * 2);
-          ctx.stroke();
-          // Skår-linje på brödet
-          ctx.beginPath();
-          ctx.moveTo(bX - 2, bY);
-          ctx.lineTo(bX + 2, bY);
-          ctx.stroke();
+          if (snack === 0) {
+            // BRÖD — triangulär platt bröd (klassisk emmer-vete-form), tar tuggor
+            ctx.fillStyle = '#d8a870';
+            const chew = chewCycle > 1 ? 0.7 : 1;   // krymper vid tugg
+            ctx.beginPath();
+            ctx.moveTo(bX - 3 * chew, bY + 2);
+            ctx.lineTo(bX + 3 * chew, bY + 2);
+            ctx.lineTo(bX, bY - 2 * chew);
+            ctx.closePath();
+            ctx.fill();
+            // Skorpa / mörk kant
+            ctx.fillStyle = '#a86838';
+            ctx.fillRect(bX - 3 * chew, bY + 1.5, 6 * chew, 0.8);
+            // Kärnor / kryddstänk
+            ctx.fillStyle = '#5a3818';
+            ctx.fillRect(bX - 1, bY, 0.6, 0.6);
+            ctx.fillRect(bX + 0.5, bY - 0.5, 0.6, 0.6);
+          } else if (snack === 1) {
+            // DADEL — små bruna avlånga former, kanske 2-3 kvar
+            const dateCount = Math.max(1, 3 - chewCycle);
+            for (let i = 0; i < dateCount; i++) {
+              const dx = (i - (dateCount-1)/2) * 2.5;
+              ctx.fillStyle = '#5a2a10';
+              ctx.beginPath();
+              ctx.ellipse(bX + dx, bY, 1.4, 2.2, 0, 0, Math.PI * 2);
+              ctx.fill();
+              // Glansfläck (dadel har naturlig glans)
+              ctx.fillStyle = 'rgba(200,140,80,0.6)';
+              ctx.beginPath();
+              ctx.ellipse(bX + dx - 0.3, bY - 0.5, 0.5, 0.8, 0, 0, Math.PI * 2);
+              ctx.fill();
+            }
+          } else {
+            // LÖK — vit boll med grönt strå ovanpå (arbetarnas favorit)
+            const chew = chewCycle > 2 ? 0.65 : 1;
+            // Lökens kropp
+            ctx.fillStyle = '#f0e8d0';
+            ctx.beginPath();
+            ctx.ellipse(bX, bY, 3 * chew, 3 * chew, 0, 0, Math.PI * 2);
+            ctx.fill();
+            // Lila/rödbrun skiktnings-linjer
+            ctx.strokeStyle = '#b09080';
+            ctx.lineWidth = 0.5;
+            ctx.beginPath();
+            ctx.arc(bX, bY, 2 * chew, 0, Math.PI * 2);
+            ctx.stroke();
+            // Litet grönt strå upptill (bara om inte "tuggen" åt bort)
+            if (chewCycle < 3) {
+              ctx.fillStyle = '#4a7a30';
+              ctx.fillRect(bX - 0.4, bY - 5, 0.8, 3);
+              ctx.fillStyle = '#6aa040';
+              ctx.fillRect(bX - 0.4, bY - 5, 0.4, 3);
+            }
+          }
         }
         else if (w.lazyAction === 'drawing_sand') {
           // Böjt över och ritar med pinne i sanden vid fötterna
@@ -18012,7 +18652,12 @@
         else if (w.lazyAction === 'gossiping') { icon = '…'; color = '#c0a0ff'; }
         else if (w.lazyAction === 'musician') { icon = '♫'; color = '#ffe070'; }
         else if (w.lazyAction === 'dicing') { icon = '⚀'; color = '#e0d0a0'; }
-        else if (w.lazyAction === 'sharing_food') { icon = '⧫'; color = '#f0c060'; }
+        else if (w.lazyAction === 'sharing_food') {
+          // Matcha ikon till snack-typ
+          if (w.snackType === 1) { icon = '●'; color = '#8a5028'; }        // dadel
+          else if (w.snackType === 2) { icon = '○'; color = '#e8d8b0'; }   // lök
+          else { icon = '▲'; color = '#d8a870'; }                            // bröd
+        }
         else if (w.lazyAction === 'drawing_sand') { icon = '~'; color = '#c8b090'; }
         else if (w.lazyAction === 'playing_animal') { icon = '♥'; color = '#ff8080'; }
         else if (w.lazyAction === 'dancing') { icon = '♫'; color = '#ffd0a0'; }
