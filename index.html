@@ -669,12 +669,60 @@
     playNextTrack();
   }
   function stopMusic() { if (music) try { music.pause(); } catch(e) {} }
-  // Byt musik när eran skiftar (Egypt → Rome)
+  // Fade ut nuvarande musik gradvis, pausar när volymen når 0
+  function fadeOutMusic(durationMs) {
+    if (!music) return;
+    const startVol = music.volume;
+    const startTime = performance.now();
+    const target = music;
+    const interval = setInterval(() => {
+      if (!target || target !== music) { clearInterval(interval); return; }
+      const t = Math.min(1, (performance.now() - startTime) / durationMs);
+      target.volume = startVol * (1 - t);
+      if (t >= 1) {
+        clearInterval(interval);
+        try { target.pause(); } catch(e) {}
+        target.volume = 0.35;
+      }
+    }, 30);
+  }
+  // Byt musik när eran skiftar (Egypt → Rome) med fade-in på ny låt
   function switchMusicForEraChange() {
     if (!audioOn.value) return;
     musicQueue = [];
     musicEra = null;
-    playNextTrack();
+    // Fade ut nuvarande om den fortfarande spelar
+    if (music && !music.paused) {
+      fadeOutMusic(600);
+      setTimeout(() => {
+        playNextTrack();
+        if (music) {
+          const target = 0.35;
+          music.volume = 0;
+          const startTime = performance.now();
+          const inInterval = setInterval(() => {
+            if (!music) { clearInterval(inInterval); return; }
+            const t = Math.min(1, (performance.now() - startTime) / 800);
+            music.volume = target * t;
+            if (t >= 1) clearInterval(inInterval);
+          }, 30);
+        }
+      }, 600);
+    } else {
+      playNextTrack();
+      // Fade in
+      if (music) {
+        const target = 0.35;
+        music.volume = 0;
+        const startTime = performance.now();
+        const inInterval = setInterval(() => {
+          if (!music) { clearInterval(inInterval); return; }
+          const t = Math.min(1, (performance.now() - startTime) / 800);
+          music.volume = target * t;
+          if (t >= 1) clearInterval(inInterval);
+        }, 30);
+      }
+    }
   }
 
   // ---------- State ----------
@@ -721,6 +769,7 @@
     stationHomePile: [0],  // Egypt: hemma-hög per station (stenar stackar här när släden är borta)
     fallenPieces: [],  // Egypt: sågade bitar som ligger på marken, väntar på att plockas upp
     _pieceIdCounter: 0,
+    egyptHoldPile: 0,  // Egypt: stenar som INTE passar just nu (t.ex. under waitingForLintel) — läggs åt sidan så bärare inte tar dem direkt igen. Transfereras till surplus när pyramiden gått framåt.
     egyptCutPile: 0,   // Egypt: fallback-hög (används inte längre men behålls för äldre save-state)
     egyptSurplus: 0,   // Egypt: överskotts-stenar som lades nära pyramiden (blocket redan använt)
     wagons: [],       // häst-och-vagn med slav-bur som anländer mellan banor
@@ -3007,10 +3056,10 @@
     transformIntro.prevRunning = state.running;
     transformIntro.prevEra = state.era;
     transformIntro.workersClearedForReveal = false;   // ny flagga per cutscene
+    transformIntro.romeMusicStarted = false;
     state.running = false;
-    // Pausa musiken och spela transform-jingeln
-    stopMusic();
-    playTransformSound();
+    // Fade ut Egypt-musiken gradvis (över zoom-in + morph-beaten)
+    fadeOutMusic(1500);
     if (opts.fromDebug) {
       overlay.classList.add('hidden');
     }
@@ -3021,6 +3070,10 @@
     transformIntro.beatTimer++;
     transformIntro.totalTimer++;
     const beat = TRANSFORM_BEATS[transformIntro.beatIdx];
+    // Spela transform-jingeln precis när morph-beaten startar (efter zoom-in)
+    if (beat.name === 'morph' && transformIntro.beatTimer === 1) {
+      playTransformSound();
+    }
     if (transformIntro.beatTimer >= beat.duration) {
       transformIntro.beatIdx++;
       transformIntro.beatTimer = 0;
@@ -3053,10 +3106,10 @@
     state.bigBlockReserve = 25;
     state.fallenPieces = [];
     state._pieceIdCounter = 0;
-    // TVÅ slädar — de kan cykla oberoende, en full på pyramiden medan andra fylls hemma
+    // TVÅ slädar båda fulla från start så båda börjar cykla direkt mot pyramiden
     state.stationSleds = [
       { id: 0, load: 6, capacity: 6, state: 'at-station', x: null, y: null, destX: null, destY: null, stuckTimer: 0 },
-      { id: 1, load: 3, capacity: 6, state: 'at-station', x: null, y: null, destX: null, destY: null, stuckTimer: 0 },
+      { id: 1, load: 6, capacity: 6, state: 'at-station', x: null, y: null, destX: null, destY: null, stuckTimer: 0 },
     ];
     state.stationHomePile = [0];   // en shared hemma-hög (piece collectors levererar hit)
     state.egyptCutPile = 0;
@@ -3166,6 +3219,12 @@
       const zoom = 3.4;
       drawTransformVignette(portraitCX, portraitCY, 1);
       drawTransformPortrait(portraitCX, portraitCY, zoom, 'caesar', 1, 0);
+      // Starta Rom-musiken redan här (efter morph) så den fadear in tidigt
+      if (!transformIntro.romeMusicStarted) {
+        transformIntro.romeMusicStarted = true;
+        state.era = 'rome';
+        switchMusicForEraChange();
+      }
     }
     else if (beat.name === 'zoom-out') {
       // Rita in Rom-scenen under men UTAN spelvärldens farao och UTAN gamla Egypt-slavar
@@ -3175,7 +3234,7 @@
         workers.length = 0;
         populateRomeStart();
         transformIntro.workersClearedForReveal = true;
-        switchMusicForEraChange();
+        // Musiken startade redan i hold-caesar-beaten
       }
       draw();
       // Vignette receding
@@ -6267,9 +6326,10 @@
         }
         w.hp -= dmg;
 
-        // Egypt bana 1: efter pisk, tilldela direkt en akut uppgift så slaven inte står handfallen
-        if (state.era === 'egypt' && state.level === 1 && !state.postGame && !w.hp <= 0) {
-          assignUrgentEgyptTaskTo(w);
+        // Egypt bana 1: efter pisk, tvinga bort ev. gammal uppgift och prio bygga pyramid
+        // (viktigast: tömma slädar vid pyramiden, bygga)
+        if (state.era === 'egypt' && state.level === 1 && !state.postGame && w.hp > 0) {
+          assignUrgentEgyptTaskTo(w, true);
         }
 
         if (wasLazy && !wasSleeping) {
@@ -6887,6 +6947,21 @@
       if (w.state === 'lazy') {
         w.lazyTimer++;
 
+        // Max-tid i lazy state — ingen ska fastna för länge (även slavar med lite energi)
+        // Efter 20s lazy → vakna upp och testa jobba igen (även om energi < 25)
+        if (w.lazyTimer > 1200 && !w.twirlingFor) {
+          w.state = 'idle';
+          w.lazyAction = null;
+          w.lazyTarget = null;
+          w.restZone = null;
+          w.restSpot = null;
+          w.atRestZone = false;
+          w.lazyTimer = 0;
+          w.energy = Math.max(w.energy, 30);
+          w.wakeBoost = 120;
+          w.target = null;
+        }
+
         // --- Twirl-uppdatering (om aktiv) ---
         if (w.twirlingFor > 0) {
           w.twirlingFor--;
@@ -7473,15 +7548,19 @@
                   w.target = { x: pile.x, y: pile.y + 8 };
                 }
               } else if (state.era === 'egypt' && state.level === 1) {
+                if ((w.surplusDropTimer || 0) > 0) { w.surplusDropTimer--; continue; }
                 const carriersEnRoute = workers.filter(o =>
                   o.carrying && !o.lintelTask && !o.woodTask &&
                   !o.pieceCollectTask && o.pickingFromHomePile == null
                 ).length;
                 const pyrCap = state.blocksTarget || 55;
-                // Vänta med att plocka nya stenar när det är dags för lintel — bara lintel-gänget jobbar
+                // Om pyramiden VÄNTAR på en specifik sten (t.ex. lintel) — alla andra vet detta
+                // och plockar inte upp någon sten alls. Bara lintel-gänget kan arbeta.
                 const waitingForLintel = state.blocksPlaced === 30;
-                const pyramidNeedsMore = state.blocksPlaced + carriersEnRoute < pyrCap
-                                       && (!waitingForLintel || w.lintelTask);
+                if (waitingForLintel && !w.lintelTask) { continue; }
+                const nextSlot = reserveNextPyramidSlot(w);
+                const slotAccessible = nextSlot != null && nextSlot <= state.blocksPlaced + 1;
+                const pyramidNeedsMore = state.blocksPlaced + carriersEnRoute < pyrCap && slotAccessible;
                 // Samla alla möjliga plockplatser med tillgänglig last
                 const candidates = [];
                 if (pyramidNeedsMore) {
@@ -7549,7 +7628,17 @@
             if (w.target) {
               moveWorkerToward(w, w.target.x, w.target.y);
               if (dist2(w.x, w.y, w.target.x, w.target.y) < 12) {
-                w.pickupTimer = 36;
+                // Bara trigga pickup-timer om det finns en riktig plockkälla
+                // (annars "phantom-plockar" släpta slavar utan uppgift)
+                const hasPickupSource = w.pickingFromStack || w.pickingFromDelivery ||
+                  w.pickingFromEgyptCut || w.pickingFromSledIdx != null ||
+                  w.pickingFromHomePile != null || w.pickingFromSurplus || w.moldPick;
+                if (hasPickupSource) {
+                  w.pickupTimer = 36;
+                } else {
+                  // Inget att plocka — nolla target så slaven letar ny uppgift nästa frame
+                  w.target = null;
+                }
               }
             }
           }
@@ -7631,15 +7720,16 @@
           const ty = next.y + 10;
           moveWorkerToward(w, tx, ty);
           if (dist2(w.x, w.y, tx, ty) < 14) {
-            // Egypt bana 1: om det inte är MIN tur (reservedSlot > blocksPlaced), släpp som surplus
-            // och gå iväg — vänta INTE. Slaven kan komma tillbaka och plocka från surplus senare.
+            // Egypt bana 1: om det inte är MIN tur (reservedSlot > blocksPlaced),
+            // läggs stenen på HOLD-högen — separat från surplus så bäraren inte plockar samma igen.
+            // När pyramiden går framåt (t.ex. lintel placerad) transfereras hold → surplus.
             if (state.era === 'egypt' && state.level === 1 && targetIdx !== state.blocksPlaced) {
-              // Fel slot just nu — droppa som surplus intill pyramiden
-              state.egyptSurplus = Math.min(30, (state.egyptSurplus || 0) + 1);
-              const surplusPos = egyptSurplusPilePos();
-              spawnFloater(surplusPos.x, surplusPos.y - 12, '+I', '#d8b070');
+              state.egyptHoldPile = Math.min(30, (state.egyptHoldPile || 0) + 1);
+              const holdPos = egyptHoldPilePos();
+              spawnFloater(holdPos.x, holdPos.y - 12, '×', '#c88060');
               w.carrying = false;
               w.reservedSlotIdx = null;
+              w.surplusDropTimer = 180;   // 3s cooldown så denna slav inte tar samma igen direkt
               continue;
             }
             if (waitingForLintel) continue;
@@ -7647,6 +7737,11 @@
             state.score += 10;
             w.carrying = false;
             w.reservedSlotIdx = null;
+            // Transferera hold-högen → surplus när pyramiden går framåt (nu passar tidigare avvisade stenar)
+            if (state.era === 'egypt' && state.level === 1 && (state.egyptHoldPile || 0) > 0) {
+              state.egyptSurplus = Math.min(30, (state.egyptSurplus || 0) + (state.egyptHoldPile || 0));
+              state.egyptHoldPile = 0;
+            }
             spawnFloater(next.x, next.y - 10, '+1', '#fff0a0');
             // Marmordamm när sten sätts på plats i Rom (vitt puder + partiklar)
             if (state.era === 'rome') {
@@ -8581,9 +8676,13 @@
     const forwardX = 30 * dir;
     return { x: sled.x + forwardX, y: sled.y + (slot === 0 ? -6 : 6) };
   }
-  // Läge för surplus-högen (nära pyramidens fot) — där bärare släpper stenar när pyramiden är full
+  // Surplus-högen — FRAMFÖR pyramiden (till vänster, redo att plockas när det är rätt tur)
   function egyptSurplusPilePos() {
-    return { x: PYR_BASE_X - PYR_ROWS * PYR_BLOCK_W / 2 - 40, y: PYR_BASE_Y - 6 };
+    return { x: PYR_BASE_X - PYR_ROWS * PYR_BLOCK_W / 2 - 25, y: PYR_BASE_Y + 20 };
+  }
+  // Hold-högen — TILL HÖGER om pyramiden, avsatt yta för stenar som inte passar just nu
+  function egyptHoldPilePos() {
+    return { x: PYR_BASE_X + PYR_ROWS * PYR_BLOCK_W / 2 + 25, y: PYR_BASE_Y + 20 };
   }
 
   // Vid varje frame: spawna nya block från reserven om det finns lediga quarry-slots
@@ -8679,22 +8778,16 @@
       const dest = stationSledPyramidPos(sled.id);
       sled.destX = dest.x; sled.destY = dest.y;
     }
-    // PARTIAL DRAG: släden har minst 3 stenar, pyramiden är starving och inga fler stenar på gång.
-    // Slavarna "känner för det" (låg sannolikhet per frame så det sker naturligt över tid)
+    // PARTIAL DRAG: släden har minst 3 stenar och inga fler stenar är på gång.
+    // Slavarna prioriterar att dra upp det som finns istället för att vänta.
     if (sled.state === 'at-station' && sled.load >= 3 && sled.load < sled.capacity) {
-      const otherActive = (state.stationSleds || []).some(s =>
-        s !== sled && (
-          (s.state === 'at-pyramid' && s.load > 0) ||
-          s.state === 'awaiting-drag' ||
-          s.state === 'dragging-out'
-        )
-      );
       const homePileEmpty = ((state.stationHomePile || [])[0] || 0) === 0;
       const anyFallenPieces = (state.fallenPieces || []).some(p => p.stationIdx === 0);
-      const noStonesComing = homePileEmpty && !anyFallenPieces;
-      if (!otherActive && noStonesComing) {
-        // "Känner för det" — 0.5% chans per frame ≈ trigger inom några sekunder
-        if (Math.random() < 0.005) {
+      const anyCutting = (state.bigBlocks || []).some(b => b.state === 'being-cut');
+      const noStonesComing = homePileEmpty && !anyFallenPieces && !anyCutting;
+      if (noStonesComing) {
+        // Ingen ström av stenar — dra upp direkt (2% chans/frame ≈ trigger inom sekunder)
+        if (Math.random() < 0.02) {
           sled.state = 'awaiting-drag';
           const dest = stationSledPyramidPos(sled.id);
           sled.destX = dest.x; sled.destY = dest.y;
@@ -8706,17 +8799,17 @@
       const home = stationSledHomePos(sled.id);
       sled.destX = home.x; sled.destY = home.y;
     }
-    // Vänta på minst 2 slavar (3 gör det snabbare)
+    // Awaiting-drag (full sled) kräver 2 slavar. Awaiting-return (tom sled) räcker med 1 (långsammare).
     if (sled.state === 'awaiting-drag' || sled.state === 'awaiting-return') {
       sled.stuckTimer = (sled.stuckTimer || 0) + 1;
       const draggers = workers.filter(w => w.sledDragTask && w.sledDragSled === sled);
-      const requiredInPlace = Math.min(draggers.length, 2);
+      const minNeeded = sled.state === 'awaiting-return' ? 1 : 2;
       let inPlace = 0;
       for (const w of draggers) {
         const slot = sledDraggerSlotPos(w.sledDragSlot || 0, sled);
         if (Math.hypot(w.x - slot.x, w.y - slot.y) <= 8) inPlace++;
       }
-      if (draggers.length >= 2 && inPlace >= 2) {
+      if (draggers.length >= minNeeded && inPlace >= minNeeded) {
         sled.state = sled.state === 'awaiting-drag' ? 'dragging-out' : 'dragging-back';
         sled.stuckTimer = 0;
       }
@@ -8729,7 +8822,8 @@
       const d = Math.hypot(dx, dy);
       if (d > 4) {
         const draggerCount = workers.filter(w => w.sledDragTask && w.sledDragSled === sled).length;
-        const speed = draggerCount >= 3 ? 0.58 : 0.42;   // 3 slavar = snabbare
+        // 3+ slavar = snabb, 2 = normal, 1 = långsam (tom sled räcker med 1)
+        const speed = draggerCount >= 3 ? 0.58 : draggerCount >= 2 ? 0.42 : 0.22;
         sled.x += (dx / d) * speed;
         sled.y += (dy / d) * speed;
         const draggers = workers.filter(w => w.sledDragTask && w.sledDragSled === sled);
@@ -8759,9 +8853,22 @@
   }
 
   // Efter pisk/task-release: ge slaven direkt en akut Egypt-uppgift
-  function assignUrgentEgyptTaskTo(w) {
+  // force = true: rensa gamla tasks (t.ex. vid pisk) — bygga pyramiden är alltid viktigast
+  function assignUrgentEgyptTaskTo(w, force) {
     if (state.era !== 'egypt' || state.level !== 1) return;
     if (w.carrying || w.bearerOf || w.torchTask || w.woodTask || w.lintelTask) return;
+    if (force) {
+      // Piskad — rensa gamla tasks så slaven kan bygga istället
+      if (w.sledTask) { w.sledTask = false; w.sledBlock = null; w.sledSlot = null; }
+      if (w.sawerTask) { w.sawerTask = false; w.sawerBlock = null; w.sawerSlot = null; }
+      if (w.waterPourerTask) { w.waterPourerTask = false; w.waterPourerBlock = null; }
+      if (w.sledDragTask) { w.sledDragTask = false; w.sledDragSled = null; w.sledDragSlot = null; }
+      if (w.pieceCollectTask) {
+        if (w.pieceCollectTask.claimedBy === w) w.pieceCollectTask.claimedBy = null;
+        w.pieceCollectTask = null; w.pieceCollectPhase = null; w.pieceCollectStation = null;
+      }
+      w.target = null;
+    }
     if (w.sledTask || w.sawerTask || w.waterPourerTask || w.sledDragTask || w.pieceCollectTask) return;
     // Kolla om pyramiden är fullbyggd + tillräckligt med bärare på väg
     const carriersEnRoute = workers.filter(o =>
@@ -9413,7 +9520,7 @@
     if (state.era !== 'egypt' || state.level !== 1) return;
     if (!state.bigBlocks) return;
     // Om det redan finns 10+ stenar väntande — hoppa över, alla ska bygga
-    if (countStonesOutsidePyramid() >= 8) return;
+    if (countStonesOutsidePyramid() >= 6) return;
     for (const bb of state.bigBlocks) {
       if (bb.state !== 'at-cutting' && bb.state !== 'being-cut') continue;
       const sled = state.stationSleds[bb.stationIdx];
@@ -9468,7 +9575,7 @@
   function assignWaterPourer() {
     if (state.era !== 'egypt' || state.level !== 1) return;
     if (!state.bigBlocks) return;
-    if (countStonesOutsidePyramid() >= 8) return;   // pausa vid överflöd
+    if (countStonesOutsidePyramid() >= 6) return;   // pausa vid överflöd
     for (const bb of state.bigBlocks) {
       if (bb.state !== 'at-cutting' && bb.state !== 'being-cut') continue;
       const sled = state.stationSleds[bb.stationIdx];
@@ -9772,6 +9879,51 @@
       // Blöt fläck på blocket (sågspåret)
       ctx.fillStyle = 'rgba(60,80,120,0.35)';
       ctx.fillRect(p.x - 12, p.y + 5, 24, 2);
+    }
+  }
+
+  // Rita hold-högen (stenar som inte passar just nu — till höger om pyramiden)
+  function drawEgyptHoldPile() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    const n = state.egyptHoldPile || 0;
+    if (n <= 0) return;
+    const pile = egyptHoldPilePos();
+    const bw = Math.round(PYR_BLOCK_W - 1);
+    const bh = Math.round(PYR_BLOCK_H - 1);
+    function capForRow(r) { return r < 1 ? 3 : r < 2 ? 2 : 1; }
+    let placed = 0;
+    let row = 0;
+    let currentY = pile.y;
+    while (placed < n && row < 20) {
+      const cols = capForRow(row);
+      const rowW = cols * bw + (cols - 1) * 2;
+      for (let c = 0; c < cols && placed < n; c++) {
+        const seed = (placed * 61 + row * 13) | 0;
+        const dx = ((seed >> 3) & 3) - 1.5;
+        const dy = ((seed >> 5) & 3) - 1;
+        const tilt = (((seed >> 7) & 7) - 3) * 0.008;
+        const x = pile.x - rowW / 2 + c * (bw + 2) + dx;
+        const y = currentY - bh + dy;
+        ctx.save();
+        ctx.translate(x + bw / 2, y + bh);
+        ctx.rotate(tilt);
+        ctx.translate(-(x + bw / 2), -(y + bh));
+        ctx.fillStyle = 'rgba(80,50,20,0.55)';
+        ctx.fillRect(x + 2, y + 2, bw, bh);
+        ctx.fillStyle = '#d8b070';
+        ctx.fillRect(x, y, bw, bh);
+        ctx.fillStyle = '#b88848';
+        ctx.fillRect(x, y + bh - 3, bw, 2);
+        ctx.fillStyle = '#a07030';
+        ctx.fillRect(x + bw - 2, y, 1, bh);
+        // Röd markering på hold-högen så det syns att den ligger på HOLD
+        ctx.fillStyle = 'rgba(180,60,40,0.5)';
+        ctx.fillRect(x + 4, y + 4, 2, 2);
+        ctx.restore();
+        placed++;
+      }
+      currentY = currentY - bh + 2;
+      row++;
     }
   }
 
@@ -11182,18 +11334,17 @@
       drawStoneCart();
       drawPigeons(dayPhase);
     }
-    // Egypt bana 1: quarry-block + huggnings-station + slädar + hemma-hög + fallande bitar + surplus
+    // Egypt bana 1: quarry-block + huggnings-station + slädar + hemma-hög + fallande bitar + surplus + hold
     if (state.era === 'egypt' && state.level === 1) {
       drawCuttingStation(0);
       drawStationHomePile(0);
-      // Rita båda slädarna, den bakre först så den främre ligger ovanpå
       const sledsSorted = [...(state.stationSleds || [])].sort((a, b) => (a.y || 0) - (b.y || 0));
       for (const sled of sledsSorted) drawStationSled(sled.id);
-      // Sortera stora block efter y så bak-block ritas först
       const sortedBlocks = [...(state.bigBlocks || [])].sort((a, b) => a.y - b.y);
       for (const bb of sortedBlocks) drawBigBlock(bb);
       drawFallenPieces();
       drawEgyptSurplusPile();
+      drawEgyptHoldPile();
     }
 
     // Workers + pharaoh + animals sorted by y
@@ -15022,14 +15173,36 @@
   }
 
   function drawBigPyramid() {
-    ctx.strokeStyle = 'rgba(80,40,10,0.5)';
-    ctx.setLineDash([4, 4]);
-    ctx.lineWidth = 1;
-    ctx.beginPath();
+    // Bygg-lina: klassiskt egyptiskt lantmäteri-rep spänt mellan två pinnar (peg + rope)
     const baseW = PYR_ROWS * PYR_BLOCK_W;
-    ctx.moveTo(PYR_BASE_X - baseW/2 - 4, PYR_BASE_Y + 2);
-    ctx.lineTo(PYR_BASE_X + baseW/2 + 4, PYR_BASE_Y + 2);
+    const ropeLeftX = PYR_BASE_X - baseW/2 - 8;
+    const ropeRightX = PYR_BASE_X + baseW/2 + 8;
+    const ropeY = PYR_BASE_Y + 4;
+    // Pinnar (stakes) i marken vid varje ände
+    ctx.fillStyle = '#5a3818';
+    ctx.fillRect(ropeLeftX - 1, ropeY - 2, 2, 8);
+    ctx.fillRect(ropeRightX - 1, ropeY - 2, 2, 8);
+    ctx.fillStyle = '#7a5028';
+    ctx.fillRect(ropeLeftX - 1, ropeY - 2, 2, 1.5);
+    ctx.fillRect(ropeRightX - 1, ropeY - 2, 2, 1.5);
+    // Rep-linje (spänt mellan pinnarna, liten hängande kurva)
+    ctx.strokeStyle = '#8a6838';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(ropeLeftX, ropeY);
+    ctx.quadraticCurveTo(PYR_BASE_X, ropeY + 1.5, ropeRightX, ropeY);
     ctx.stroke();
+    // Fibrös rep-struktur — små tvär-streck längs repet (twinat rep-mönster)
+    ctx.strokeStyle = 'rgba(90,55,25,0.6)';
+    ctx.lineWidth = 0.6;
+    for (let x = ropeLeftX + 4; x < ropeRightX; x += 5) {
+      const t = (x - ropeLeftX) / (ropeRightX - ropeLeftX);
+      const y = ropeY + Math.sin(t * Math.PI) * 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x, y - 0.5);
+      ctx.lineTo(x + 1.5, y + 0.8);
+      ctx.stroke();
+    }
     ctx.setLineDash([]);
     ctx.strokeStyle = 'rgba(60,30,10,0.25)';
     ctx.beginPath();
