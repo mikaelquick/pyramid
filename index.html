@@ -3013,6 +3013,10 @@
     }
     state.extraStones = 10;
     state.romePopulated = true;
+    // I Rom byggs Colosseum med 10 stenar per våning × 4 våningar = 40 totalt
+    // så varje sten är visuellt lika stor som slavarnas bär-sten (PYR_BLOCK_W bred)
+    state.blocksTarget = 40;
+    state.won = false;
   }
 
   function skipTransformIntro() {
@@ -7261,27 +7265,53 @@
             }
           }
         } else {
-          // Rom-läge PRIO 1: om kärran står vid pile och kan ta emot mer sten,
-          // gå dit och släpp direkt på kärran — snabbast för bygget
-          if (state.era === 'rome' && state.cart && state.cart.phase === 'loading' && state.cart.stones < 4) {
-            const cart = state.cart;
-            moveWorkerToward(w, cart.x, cart.y + 6);
-            if (dist2(w.x, w.y, cart.x, cart.y + 6) < 14) {
-              cart.stones = Math.min(4, cart.stones + 1);
+          // Rom-läge: bärare siktar ALLTID mot kranens bas om det finns plats (max 7),
+          // annars på Colosseum själv. Kärran fylls av den dedikerade cart-loader-slaven —
+          // bärare ska inte gå tillbaka till kärran med sten som redan är nära bygget.
+          const firstTierBuilt = state.blocksPlaced >= Math.floor(state.blocksTarget / 4);
+          if (state.era === 'rome' && firstTierBuilt && (state.craneBigStones || 0) < 7) {
+            const cranePos = cartCranePos();
+            moveWorkerToward(w, cranePos.x, cranePos.y);
+            if (dist2(w.x, w.y, cranePos.x, cranePos.y) < 14) {
+              state.craneBigStones = Math.min(7, (state.craneBigStones || 0) + 1);
               w.carrying = false;
-              spawnFloater(cart.x, cart.y - 20, '+I', '#e8dcc4');
+              spawnFloater(cranePos.x, cranePos.y - 20, '+I', '#e8dcc4');
               continue;
             }
             continue;
           }
-          // Rom-läge PRIO 2: när Colosseum är på övre halvan (tier 2+), släpp stenen vid kranens bas
-          // istället för att gå in i själva bygget — kranen tar sen upp den till rätt plats.
-          if (state.era === 'rome' && state.blocksPlaced >= Math.floor(state.blocksTarget / 2)) {
+          // Rom-läge fallback: om kranen är full eller första våningen inte byggd,
+          // GÅ IN I SJÄLVA BYGGET och placera stenen där (som bana-1-flow), inte tillbaka till delivery-högen.
+          // Detta undvik loop där en bärare plockar från delivery-högen, går mot kranen, misslyckas,
+          // och släpper den igen på delivery-högen.
+          if (state.era === 'rome') {
+            const next = pyramidBlockPos(state.blocksPlaced);
+            if (!next) {
+              // Fullbyggt — stapla på extraStones vid stapel-högen
+              state.extraStones = Math.min(60, (state.extraStones || 0) + 1);
+              w.carrying = false;
+              continue;
+            }
+            const tx = next.x + (w.x < next.x ? -20 : 20);
+            const ty = next.y + 10;
+            moveWorkerToward(w, tx, ty);
+            if (dist2(w.x, w.y, tx, ty) < 14) {
+              state.blocksPlaced++;
+              state.score += 10;
+              w.carrying = false;
+              spawnFloater(next.x, next.y - 10, '+1', '#fff0a0');
+              state.blockSettleIdx = state.blocksPlaced - 1;
+              state.blockSettleTimer = 22;
+              continue;
+            }
+            continue;
+          }
+          // Bana 2 gammalt tier-2 fallback (används sällan nu)
+          if (false && state.blocksPlaced >= Math.floor(state.blocksTarget / 2)) {
             const cranePos = cartCranePos();
             moveWorkerToward(w, cranePos.x, cranePos.y);
             if (dist2(w.x, w.y, cranePos.x, cranePos.y) < 14) {
-              // Släpp stenen i kranens stapel av stora block
-              state.craneBigStones = Math.min(6, (state.craneBigStones || 0) + 1);
+              state.craneBigStones = Math.min(7, (state.craneBigStones || 0) + 1);
               w.carrying = false;
               spawnFloater(cranePos.x, cranePos.y - 20, '+I', '#e8dcc4');
               continue;
@@ -9187,7 +9217,7 @@
     if (state.level === 1) {
       if (state.era === 'rome') {
         drawTriumphalArch(380, 480, dayPhase);
-        drawRomanBench(380, 410, dayPhase);
+        drawRomanFountain(380, 470, dayPhase);
       }
       else drawSphinx(380, 480, dayPhase);
     }
@@ -11364,25 +11394,41 @@
     }
     const firstTierBuilt = state.blocksPlaced >= state.blocksTarget / 4;
     if (!firstTierBuilt) return;
-    // Spawna stora stenar var ~15 sek (900 frames), max 6 i högen
-    if ((state.time % 900) === 0 && (state.craneBigStones || 0) < 6) {
-      state.craneBigStones = (state.craneBigStones || 0) + 1;
-    }
+    // Max 7 stenar kan ligga vid kranens bas — automatisk spawn borttagen,
+    // slavar bär dem dit istället (se prio-logiken i pickup)
     // Om kranen har driver + stora stenar → progressera cykel
     const hasDriver = workers.some(w => w.wheelTask && w.wheelPhase === 'walking');
     if (hasDriver && (state.craneBigStones || 0) > 0) {
-      state.craneCycle = (state.craneCycle || 0) + 1 / 260;
+      state.craneCycle = (state.craneCycle || 0) + 1 / 360;   // ~6s hela cykeln (5 faser)
       if (state.craneCycle >= 1) {
         state.craneCycle = 0;
         state.craneBigStones = Math.max(0, (state.craneBigStones || 0) - 1);
-        // Lyft färdigt — placera ett block på Colosseum (endast vid tier 2+)
-        if (state.blocksPlaced >= Math.floor(state.blocksTarget / 2) && state.blocksPlaced < state.blocksTarget) {
+        // Lyft färdigt — placera ett block på Colosseum
+        if (state.blocksPlaced < state.blocksTarget) {
           state.blocksPlaced++;
           state.score += 20;
           state.blockSettleIdx = state.blocksPlaced - 1;
           state.blockSettleTimer = 24;
-          const p = pyramidBlockPos(state.blocksPlaced - 1);
-          if (p) spawnFloater(p.x, p.y - 14, '+I', '#ffe070');
+          // Marmordamm-partiklar när stenen sätts på plats
+          const BLOCKS_PER_TIER = 10;
+          const totalColW = BLOCKS_PER_TIER * PYR_BLOCK_W;
+          const colTierH = Math.round(PYR_BLOCK_H * 1.5);
+          const placedTier = Math.floor((state.blocksPlaced - 1) / BLOCKS_PER_TIER);
+          const placedInTier = (state.blocksPlaced - 1) % BLOCKS_PER_TIER;
+          const px = PYR_BASE_X - totalColW / 2 + (placedInTier + 0.5) * PYR_BLOCK_W;
+          const py = PYR_BASE_Y - placedTier * colTierH - colTierH / 2;
+          spawnFloater(px, py - 14, '+I', '#ffe070');
+          for (let i = 0; i < 10; i++) {
+            const a = Math.random() * Math.PI;
+            const s = 0.5 + Math.random() * 2;
+            state.cracks.push({
+              x: px + (Math.random()-0.5)*PYR_BLOCK_W,
+              y: py + PYR_BLOCK_H/2,
+              vx: Math.cos(a) * s * (Math.random() < 0.5 ? -1 : 1),
+              vy: -Math.sin(a) * s * 0.6 - 0.2,
+              life: 1.2, color: i < 5 ? '#f4ecd8' : '#c8b898', grav: 0.05,
+            });
+          }
         }
       }
     }
@@ -12427,11 +12473,11 @@
     ctx.fillStyle = beamLight;
     ctx.fillRect(cx - 6, cy - R - 6, 12, 1.5);
 
-    // Bomstock (utsträckt arm) från toppen av hjulet över mot Colosseum
-    // Bommen sträcker sig LÅNGT över Colosseum-fasaden så man ser stenen lyftas dit
-    const totalWCol = PYR_ROWS * PYR_BLOCK_W;
-    const boomEndX = PYR_BASE_X - totalWCol / 4;   // ovanför vänster halvan av Colosseum
-    const boomEndY = cy - R - 60;                    // högre upp för dramatisk vinkel
+    // Bommen sträcker sig RAKT UPP från kranen — historiskt korrekt polyspaston.
+    // Stenar lyfts vertikalt och tas emot av slavar på ställningen som bär dem till platsen.
+    const boomEndX = cx;
+    const boomEndY = cy - R - 70;
+    // Vertikal huvudstolpe (bommen)
     ctx.strokeStyle = beam;
     ctx.lineWidth = 4;
     ctx.lineCap = 'round';
@@ -12439,11 +12485,19 @@
     ctx.moveTo(cx, cy - R);
     ctx.lineTo(boomEndX, boomEndY);
     ctx.stroke();
-    // Diagonal stötta
+    // Kort tvär-arm i toppen (som trissan hänger från)
+    ctx.lineWidth = 3;
+    ctx.beginPath();
+    ctx.moveTo(cx - 8, boomEndY);
+    ctx.lineTo(cx + 8, boomEndY - 3);
+    ctx.stroke();
+    // Diagonala stöttor på båda sidorna (stabiliserar den vertikala stolpen)
     ctx.lineWidth = 2;
     ctx.beginPath();
-    ctx.moveTo(cx + 12, cy - R + 4);
-    ctx.lineTo(boomEndX - 20, boomEndY + 10);
+    ctx.moveTo(cx - 14, cy - R + 4);
+    ctx.lineTo(cx - 2, boomEndY + 30);
+    ctx.moveTo(cx + 14, cy - R + 4);
+    ctx.lineTo(cx + 2, boomEndY + 30);
     ctx.stroke();
     ctx.lineCap = 'butt';
 
@@ -12466,35 +12520,127 @@
     ctx.moveTo(cx, cy - R - 6);
     ctx.lineTo(boomEndX, boomEndY);
     ctx.stroke();
-    // Del 2: från trissan ner med stenen
-    const cycle = (state.time * 0.45) % 260;
-    const liftRatio = Math.min(1, cycle / 180);
-    const stoneY = boomEndY + 24 + (1 - liftRatio) * 40;
-    ctx.beginPath();
-    ctx.moveTo(boomEndX, boomEndY);
-    ctx.lineTo(boomEndX, stoneY - 6);
-    ctx.stroke();
-    // Stenen i luften (STOR marmor — behöver kranen) bara när det finns stora stenar och driver
-    if (hasDriver && cycle < 220) {
-      // Stora bygg-block (större än de bärare drar för hand)
-      const bw = 32, bh = 20;
+    // Lyft-fas-logik — kranen LYFTER BARA RAKT UPP, ställnings-slavar bär över:
+    //  0.00-0.15 = rep sänks ner tomt vid kranen
+    //  0.15-0.25 = knyt-paus vid marken
+    //  0.25-0.55 = stenen lyfts RAKT UPP till bommens topp
+    //  0.55-0.65 = paus vid toppen — ställnings-slavar "tar över" stenen
+    //  0.65-1.00 = 2 slavar BÄR stenen tvärs över ställningen till rätt plats
+    const cyc = state.craneCycle || 0;
+
+    // Målposition: nästa sten på Colosseum
+    const BLOCKS_PER_TIER = 10;
+    const totalColW = BLOCKS_PER_TIER * PYR_BLOCK_W;
+    const colTierH = Math.round(PYR_BLOCK_H * 1.5);
+    const targetTier = Math.floor(state.blocksPlaced / BLOCKS_PER_TIER);
+    const blockInTier = state.blocksPlaced % BLOCKS_PER_TIER;
+    const targetX = PYR_BASE_X - totalColW / 2 + (blockInTier + 0.5) * PYR_BLOCK_W;
+    const targetY = PYR_BASE_Y - targetTier * colTierH - colTierH / 2;
+
+    let stoneVisible = false;
+    let stoneX = boomEndX;
+    let stoneY = boomEndY;
+    let carriedByScaffoldSlaves = false;   // syns när slavar bär
+    const groundStoneY = cy + R + 10;
+    const scaffoldTopY = boomEndY;   // ungefärlig höjd på ställningens topp
+    if (cyc < 0.15) {
+      // Fas 1: rep sänks tomt
+      stoneVisible = false;
+      const t = cyc / 0.15;
+      stoneX = boomEndX;
+      stoneY = boomEndY + (groundStoneY - boomEndY) * t;
+    } else if (cyc < 0.25) {
+      // Fas 2: knyt vid marken
+      stoneVisible = true;
+      stoneX = boomEndX;
+      stoneY = groundStoneY;
+    } else if (cyc < 0.55) {
+      // Fas 3: lyft RAKT UPP
+      stoneVisible = true;
+      const t = (cyc - 0.25) / 0.3;
+      stoneX = boomEndX;
+      stoneY = groundStoneY + (boomEndY - groundStoneY) * t;
+    } else if (cyc < 0.65) {
+      // Fas 4: ställnings-slavarna tar över — stenen vid toppen, ingen rep
+      stoneVisible = true;
+      carriedByScaffoldSlaves = true;
+      stoneX = boomEndX;
+      stoneY = scaffoldTopY + 4;
+    } else {
+      // Fas 5: slavarna BÄR stenen tvärs över ställningen till placeringen
+      stoneVisible = true;
+      carriedByScaffoldSlaves = true;
+      const t = (cyc - 0.65) / 0.35;
+      // Rör sig först horisontellt sedan ner till platsen (två segment)
+      if (t < 0.7) {
+        // Bär tvärs över ställningen på scaffold-höjd
+        const tt = t / 0.7;
+        stoneX = boomEndX + (targetX - boomEndX) * tt;
+        stoneY = scaffoldTopY + 4;
+      } else {
+        // Sista biten: sänk ner till exakt block-position
+        const tt = (t - 0.7) / 0.3;
+        stoneX = targetX;
+        stoneY = scaffoldTopY + 4 + (targetY - (scaffoldTopY + 4)) * tt;
+      }
+    }
+
+    // Rep — visas BARA när kranen faktiskt hissar (inte när slavar bär)
+    if (!carriedByScaffoldSlaves) {
+      ctx.strokeStyle = '#7a5028';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(boomEndX, boomEndY);
+      ctx.lineTo(stoneX, stoneY - 6);
+      ctx.stroke();
+    }
+    if (stoneVisible && hasDriver) {
+      // Sten med SAMMA storlek som bärarnas stenar och Colosseum-slots
+      const bw = PYR_BLOCK_W;
+      const bh = PYR_BLOCK_H;
+      const sx = stoneX - bw / 2;
+      const sy = stoneY - bh / 2;
+
+      // Om ställnings-slavarna bär, rita två slavar på var sida om stenen
+      if (carriedByScaffoldSlaves) {
+        const carryBob = Math.sin(state.time * 0.16) * 1.5;
+        // Slav på vänster sida
+        drawScaffoldCarrier(sx - 4, sy + bh + 4 + carryBob, -1);
+        // Slav på höger sida
+        drawScaffoldCarrier(sx + bw + 4, sy + bh + 4 + carryBob, 1);
+      }
+
       ctx.fillStyle = '#a89880';
-      ctx.fillRect(boomEndX - bw/2 + 2, stoneY - bh/2 + 2, bw, bh);
+      ctx.fillRect(sx + 2, sy + 2, bw, bh);
       ctx.fillStyle = '#e8dcc4';
-      ctx.fillRect(boomEndX - bw/2, stoneY - bh/2, bw, bh);
+      ctx.fillRect(sx, sy, bw, bh);
       ctx.fillStyle = '#f4ecd8';
-      ctx.fillRect(boomEndX - bw/2, stoneY - bh/2, bw, 3);
-      ctx.fillStyle = '#a02818';
-      ctx.fillRect(boomEndX - bw/2 + 4, stoneY - bh/2 + 4, bw - 8, 1.6);
-      ctx.fillStyle = '#f4d060';
-      ctx.fillRect(boomEndX + bw/2 - 7, stoneY - bh/2 + 3, 3, 4);
-      // Rep-slinga runt stenens topp (håller den upphängd)
+      ctx.fillRect(sx, sy, bw, 3);
+      ctx.fillStyle = '#b0a084';
+      ctx.fillRect(sx, sy + bh - 2, bw, 2);
+      ctx.fillStyle = '#a89880';
+      ctx.fillRect(sx + bw - 2, sy, 2, bh);
+      // Rep-slinga runt stenens topp — bara när kranen faktiskt håller stenen
+      if (!carriedByScaffoldSlaves) {
+        ctx.strokeStyle = '#3a2810';
+        ctx.lineWidth = 1.4;
+        ctx.beginPath();
+        ctx.moveTo(sx + 4, sy);
+        ctx.lineTo(stoneX, sy - 4);
+        ctx.lineTo(sx + bw - 4, sy);
+        ctx.stroke();
+      }
+    } else {
+      // Tom krok när repet är på väg ner eller inget att lyfta
+      ctx.fillStyle = '#5a3818';
+      ctx.beginPath();
+      ctx.arc(stoneX, stoneY - 3, 2.5, 0, Math.PI * 2);
+      ctx.fill();
+      // Krok-form
       ctx.strokeStyle = '#3a2810';
       ctx.lineWidth = 1.4;
       ctx.beginPath();
-      ctx.moveTo(boomEndX - bw/2 + 4, stoneY - bh/2);
-      ctx.lineTo(boomEndX, stoneY - bh/2 - 4);
-      ctx.lineTo(boomEndX + bw/2 - 4, stoneY - bh/2);
+      ctx.arc(stoneX, stoneY, 3, -Math.PI * 0.2, Math.PI * 1.2);
       ctx.stroke();
     }
 
@@ -12563,6 +12709,40 @@
       ctx.fillStyle = '#a07020';
       ctx.fillRect(handX - 1, handY - 2, 2, 3);
     }
+  }
+
+  // Slav-silhuett som bär stenen med kranens hjälp — kompakt sprite för sidoperspektiv
+  function drawScaffoldCarrier(x, y, facing) {
+    // Ben (ståendes)
+    ctx.fillStyle = '#c08850';
+    ctx.fillRect(x - 2, y - 8, 2, 8);
+    ctx.fillRect(x + 0.5, y - 8, 2, 8);
+    // Cremevit tunika + röd clavus
+    ctx.fillStyle = '#eadcbc';
+    ctx.fillRect(x - 4, y - 14, 8, 7);
+    ctx.fillStyle = '#a02818';
+    ctx.fillRect(x, y - 14, 1, 7);
+    // Torso (skin) uppe
+    ctx.fillStyle = '#c08850';
+    ctx.fillRect(x - 3, y - 20, 6, 6);
+    // Huvud
+    ctx.fillStyle = '#c08850';
+    ctx.fillRect(x - 3, y - 26, 6, 6);
+    // Kort brunt hår
+    ctx.fillStyle = '#2a1a08';
+    ctx.fillRect(x - 3, y - 26, 6, 2);
+    // Öga
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(x + (facing > 0 ? -2 : 1), y - 23, 1.2, 1);
+    // Arm sträckt UPPÅT för att hålla stenen (mot stone-mitt)
+    ctx.strokeStyle = '#c08850';
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x + facing * 3, y - 18);
+    ctx.lineTo(x + facing * 6, y - 26);   // arm når upp till stenens undersida
+    ctx.stroke();
+    ctx.lineCap = 'butt';
   }
 
   // Häst som drar treadwheel-kranen — hästen tittar/går ÅT VÄNSTER (bort från hjulet)
@@ -13687,10 +13867,14 @@
   function drawColosseum() {
     const cx = PYR_BASE_X;
     const baseY = PYR_BASE_Y;
-    const totalW = PYR_ROWS * PYR_BLOCK_W;    // samma bredd som pyramiden
-    const totalH = PYR_ROWS * PYR_BLOCK_H * 0.72;  // lite lägre än pyramiden
-    // Progress 0..1
-    const progress = Math.min(1, state.blocksPlaced / state.blocksTarget);
+    // Antal stenar per våning = totala bredden / stenens bredd
+    // Så varje sten som placeras är EXAKT lika stor som stenen slaven bär (PYR_BLOCK_W)
+    const TIERS = 4;
+    const BLOCKS_PER_TIER = 10;   // matchar state.blocksTarget/TIERS
+    const blockW = PYR_BLOCK_W;
+    const totalW = BLOCKS_PER_TIER * blockW;   // 10 * 28 = 280 (samma som förut)
+    const tierH = Math.round(PYR_BLOCK_H * 1.5);   // ca 1.5 gånger stenens höjd per våning
+    const totalH = tierH * TIERS;
 
     // Skiss/outline av den färdiga byggnaden
     ctx.strokeStyle = 'rgba(80,40,10,0.35)';
@@ -13701,9 +13885,8 @@
     ctx.stroke();
     ctx.setLineDash([]);
 
-    // 4 tiers, varje tier har rundade bågar
-    const TIERS = 4;
-    const tierH = totalH / TIERS;
+    // Räkna hur många stenar per våning som är byggda
+    const placed = state.blocksPlaced;
     const stoneMain = '#dcc190';
     const stoneShade = '#a68050';
     const stoneDark = '#7a5028';
@@ -13722,15 +13905,18 @@
     for (let tier = 0; tier < TIERS; tier++) {
       const yTop = baseY - tierH * (tier + 1);
       const yBot = baseY - tierH * tier;
-      const tierStart = tier / TIERS;
-      if (progress < tierStart) continue;
-      const tierProgress = Math.min(1, (progress - tierStart) / (1 / TIERS));
+      // Antal stenar redan lagda i denna våning
+      const tierBlocks = Math.max(0, Math.min(BLOCKS_PER_TIER, placed - tier * BLOCKS_PER_TIER));
+      if (tierBlocks === 0) continue;
+      const tierProgress = tierBlocks / BLOCKS_PER_TIER;
 
       const isAttica = (tier === TIERS - 1);
-      const arches = isAttica ? 10 : 8;
+      // En båge per sten så varje placerad sten fyller ett båg-slot
+      const arches = BLOCKS_PER_TIER;
       const archW = totalW / arches;
 
-      const revealX = -totalW/2 + tierProgress * totalW;
+      // Reveal exakt = antal stenar × stenens bredd (så visuell del matchar sten-storleken)
+      const revealX = -totalW/2 + tierBlocks * blockW;
       ctx.save();
       ctx.beginPath();
       ctx.rect(cx - totalW/2, yTop, revealX + totalW/2, yBot - yTop);
@@ -13745,10 +13931,19 @@
       // Skugg-list nere
       ctx.fillStyle = rawShade;
       ctx.fillRect(cx - totalW/2, yBot - 3, totalW, 3);
-      // Blockfogar (horisontella linjer var 12 px) — synliga även på rå sten
+      // Vertikala block-fogar (var PYR_BLOCK_W) — visar tydligt varje placerad sten
       ctx.strokeStyle = rawLine;
-      ctx.lineWidth = 0.5;
-      for (let ly = yTop + 12; ly < yBot - 4; ly += 12) {
+      ctx.lineWidth = 0.8;
+      for (let bi = 1; bi < BLOCKS_PER_TIER; bi++) {
+        const vx = cx - totalW/2 + bi * blockW;
+        ctx.beginPath();
+        ctx.moveTo(vx, yTop);
+        ctx.lineTo(vx, yBot - 1);
+        ctx.stroke();
+      }
+      // Horisontella fogar var ~14 px (inuti varje sten)
+      ctx.lineWidth = 0.4;
+      for (let ly = yTop + 14; ly < yBot - 4; ly += 14) {
         ctx.beginPath();
         ctx.moveTo(cx - totalW/2, ly);
         ctx.lineTo(cx + totalW/2, ly);
@@ -13814,6 +14009,158 @@
     ctx.lineTo(cx + totalW/2 + 4, baseY + 2);
     ctx.stroke();
     ctx.setLineDash([]);
+  }
+
+  // Romersk fontän (nymphaeum) — marmor-basin med central lejon-spout och rippande vatten
+  // där slavar kan sitta på kanten för att svalka sig
+  function drawRomanFountain(cx, cy, dayPhase) {
+    const marble = mixHex('#eae0c8', '#28223a', 1 - dayPhase);
+    const marbleShade = mixHex('#a89880', '#141024', 1 - dayPhase);
+    const marbleDark = mixHex('#7a6a54', '#0a0812', 1 - dayPhase);
+    const gold = mixHex('#f4d060', '#3a2810', 1 - dayPhase);
+    const water = mixHex('#5fa8c8', '#1a3050', 1 - dayPhase);
+    const waterDeep = mixHex('#1e4868', '#08101e', 1 - dayPhase);
+
+    // Marken-skugga under fontänen
+    ctx.fillStyle = 'rgba(20,10,4,0.4)';
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 60, 60, 6, 0, 0, Math.PI * 2);
+    ctx.fill();
+
+    // Bas-plattform (3 steg som Colosseum-templen)
+    for (let i = 0; i < 3; i++) {
+      const stepW = 100 - i * 10;
+      const stepY = cy + 42 + i * -6;
+      ctx.fillStyle = marbleDark;
+      ctx.fillRect(cx - stepW/2, stepY + 3, stepW, 3);
+      ctx.fillStyle = marbleShade;
+      ctx.fillRect(cx - stepW/2, stepY, stepW, 3);
+      ctx.fillStyle = marble;
+      ctx.fillRect(cx - stepW/2, stepY, stepW, 1);
+    }
+
+    // Basinens yttre marmor-ring (den man sitter på)
+    const basinW = 60, basinH = 18;
+    // Skugga bakom (bakre halva)
+    ctx.fillStyle = marbleDark;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 20, basinW / 2 + 3, basinH / 2 + 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Yttre marmor
+    ctx.fillStyle = marbleShade;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 20, basinW / 2, basinH / 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Övre marmor-kant (där folk sitter)
+    ctx.fillStyle = marble;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 15, basinW / 2 - 2, basinH / 2 - 2, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Fog-detaljer i basin-kanten
+    ctx.strokeStyle = marbleDark;
+    ctx.lineWidth = 0.6;
+    for (let i = 0; i < 6; i++) {
+      const a = (i / 6) * Math.PI * 2;
+      const ex = cx + Math.cos(a) * (basinW / 2 - 1);
+      const ey = cy + 15 + Math.sin(a) * (basinH / 2 - 2);
+      ctx.beginPath();
+      ctx.moveTo(ex, ey);
+      ctx.lineTo(ex + Math.cos(a) * 3, ey + Math.sin(a) * 2);
+      ctx.stroke();
+    }
+
+    // Vatten i basinen
+    ctx.fillStyle = waterDeep;
+    ctx.beginPath();
+    ctx.ellipse(cx, cy + 14, basinW / 2 - 6, basinH / 2 - 4, 0, 0, Math.PI * 2);
+    ctx.fill();
+    ctx.fillStyle = water;
+    ctx.beginPath();
+    ctx.ellipse(cx - 2, cy + 12, basinW / 2 - 8, basinH / 2 - 5, 0, 0, Math.PI * 2);
+    ctx.fill();
+    // Krusningar
+    const rippleT = state.time * 0.05;
+    ctx.strokeStyle = `rgba(255,255,255,${0.35 + Math.sin(rippleT) * 0.15})`;
+    ctx.lineWidth = 0.7;
+    for (let i = 0; i < 3; i++) {
+      const rr = (rippleT + i * 0.4) % 1;
+      ctx.beginPath();
+      ctx.ellipse(cx, cy + 12, (basinW / 2 - 8) * (0.3 + rr * 0.7), (basinH / 2 - 5) * (0.3 + rr * 0.7), 0, 0, Math.PI * 2);
+      ctx.stroke();
+    }
+
+    // Central pelare + lejon-spout
+    const pillarX = cx, pillarBase = cy + 10, pillarTop = cy - 28;
+    // Skaft
+    ctx.fillStyle = marbleShade;
+    ctx.fillRect(pillarX - 5, pillarTop, 10, pillarBase - pillarTop);
+    ctx.fillStyle = marble;
+    ctx.fillRect(pillarX - 4, pillarTop, 4, pillarBase - pillarTop);
+    // Räfflor
+    ctx.strokeStyle = marbleDark;
+    ctx.lineWidth = 0.4;
+    ctx.beginPath();
+    ctx.moveTo(pillarX - 2, pillarTop + 2);
+    ctx.lineTo(pillarX - 2, pillarBase - 2);
+    ctx.moveTo(pillarX + 2, pillarTop + 2);
+    ctx.lineTo(pillarX + 2, pillarBase - 2);
+    ctx.stroke();
+    // Kapitäl
+    ctx.fillStyle = marbleDark;
+    ctx.fillRect(pillarX - 7, pillarTop - 3, 14, 3);
+    ctx.fillStyle = marble;
+    ctx.fillRect(pillarX - 7, pillarTop - 5, 14, 2);
+
+    // Lejon-huvud som spouten
+    const spoutY = pillarTop - 4;
+    ctx.fillStyle = gold;
+    ctx.beginPath();
+    ctx.arc(pillarX, spoutY, 6, 0, Math.PI * 2);
+    ctx.fill();
+    // Man runt ansiktet
+    ctx.fillStyle = mixHex('#a07020', '#2a1810', 1 - dayPhase);
+    ctx.beginPath();
+    ctx.arc(pillarX, spoutY, 6, 0, Math.PI * 2);
+    ctx.stroke();
+    // Ansikte-detaljer (ögon + mule)
+    ctx.fillStyle = '#3a2010';
+    ctx.fillRect(pillarX - 3, spoutY - 2, 1.5, 1.5);
+    ctx.fillRect(pillarX + 1, spoutY - 2, 1.5, 1.5);
+    // Öppen mun (där vattnet strömmar ut)
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(pillarX - 2, spoutY + 2, 4, 2);
+
+    // Vattenstråle från spouten UPP och ner i basinen
+    const streamPhase = state.time * 0.2;
+    ctx.strokeStyle = `rgba(180,220,240,${0.85 + Math.sin(streamPhase) * 0.1})`;
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(pillarX, spoutY + 4);
+    // Vattnet skjuts upp och faller ner i basinen (parabol)
+    ctx.quadraticCurveTo(pillarX, spoutY - 8, pillarX + 8, cy + 4);
+    ctx.stroke();
+    // Andra stråle till andra sidan (symmetriskt)
+    ctx.beginPath();
+    ctx.moveTo(pillarX, spoutY + 4);
+    ctx.quadraticCurveTo(pillarX, spoutY - 8, pillarX - 8, cy + 4);
+    ctx.stroke();
+    ctx.lineCap = 'butt';
+    // Vatten-droppar mid-air
+    for (let i = 0; i < 4; i++) {
+      const dt = (streamPhase + i * 0.35) % 1;
+      const side = i % 2 === 0 ? 1 : -1;
+      const dropX = pillarX + Math.sin(dt * Math.PI) * 8 * side;
+      const dropY = spoutY - 4 + dt * 18;
+      ctx.fillStyle = `rgba(200,230,255,${0.7 * (1 - dt)})`;
+      ctx.beginPath();
+      ctx.arc(dropX, dropY, 1.2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    // Guld-detalj på basinens främre kant
+    ctx.fillStyle = gold;
+    ctx.fillRect(cx - 2, cy + 24, 4, 2);
   }
 
   // Romersk marmor-bänk (bred sittplats — där slavar kan slöa vid triumfbågen)
