@@ -151,12 +151,13 @@
     gap: 24px;
   }
   #overlay h1 {
-    font-size: 64px;
+    font-size: 72px;
     color: #f8d870;
     margin: 0;
     text-shadow: 4px 4px 0 #6b3410, 0 0 22px rgba(244,216,112,0.4);
-    letter-spacing: 4px;
+    letter-spacing: 6px;
     font-weight: bold;
+    text-transform: lowercase;
   }
   #overlay .logo {
     filter: drop-shadow(0 6px 10px rgba(0,0,0,0.6));
@@ -178,6 +179,17 @@
   }
   #overlay button:hover { filter: brightness(1.1); transform: translateY(-2px); box-shadow: 0 8px 0 #6b3410, 0 12px 32px rgba(0,0,0,0.5); }
   #overlay button:active { transform: translateY(4px); box-shadow: 0 2px 0 #6b3410, 0 4px 12px rgba(0,0,0,0.5); }
+  #overlay button .en {
+    display: block;
+    font-size: 13px;
+    letter-spacing: 2px;
+    opacity: 0.65;
+    margin-top: 4px;
+    font-weight: normal;
+    text-transform: uppercase;
+  }
+  #overlay button.menu-btn { font-family: 'Noto Sans Egyptian Hieroglyphs', 'Segoe UI Historic', Georgia, serif; }
+  #overlay .menu-stack { display: flex; flex-direction: column; gap: 14px; align-items: center; }
   #overlay.hidden { display: none; }
   .hint { font-size: 13px; opacity: 0.55; letter-spacing: 2px; }
   .debug-btn {
@@ -302,11 +314,15 @@
       <!-- wrist strap -->
       <path d="M55,176 Q40,170 30,178" stroke="#3a2010" stroke-width="3" fill="none" stroke-linecap="round"/>
     </svg>
-    <h1>PHARAOH'S PYRAMID</h1>
-    <button id="startBtn">PLAY</button>
+    <h1>pyramid</h1>
+    <div class="menu-stack">
+      <button id="startBtn" class="menu-btn">𓊽 𓋹 𓏏<span class="en">(New Game)</span></button>
+      <button id="continueBtn" class="menu-btn">𓂁 𓏏 𓂝<span class="en">(Continue)</span></button>
+    </div>
     <div class="hint">WASD · SPACE TO WHIP</div>
     <button id="debugIntroBtn" class="debug-btn" title="Play end-intro (debug)">▶ END-INTRO (DEBUG)</button>
     <button id="debugContinueBtn" class="debug-btn" title="Jump to continue/sandbox (debug)">▶ CONTINUE (DEBUG)</button>
+    <button id="debugLevel2Btn" class="debug-btn" title="Trigger level 2 transition (debug)">▶ LEVEL 2 (DEBUG)</button>
   </div>
   <div id="skipHint" class="hidden">SPACE / CLICK TO SKIP</div>
   </div><!-- /#wrap -->
@@ -653,6 +669,27 @@
     workersDowned: 0, // cumulativ räknare för slut-introts stämning
     entranceFade: 0,  // fade-in counter för pyramidingångens mörker
     scaffoldWood: 0,  // antal trä-leveranser för front-ställning
+    level: 1,         // 1, 2, ... — roguelike-progression
+    phase: 'building',// 'building' | 'demolishing' — under bana 2-övergång river de gamla pyramiden
+    wagons: [],       // häst-och-vagn med slav-bur som anländer mellan banor
+    wagonPhase: null, // null | 'entering' | 'unloading' | 'leaving'
+    wagonTimer: 0,
+  };
+
+  // Level-transition: häst-och-vagn anländer + faraon möter förarna (dialog + upgrade)
+  const levelTransition = {
+    active: false,
+    phase: null,    // 'wagons-enter' | 'awaiting-pharaoh' | 'dialog' | 'upgrade-choice' | 'unload' | 'wagons-leave' | 'done'
+    timer: 0,
+    wagons: [],
+    newSlavesQueue: [],
+    // Dialog-state — pratbubblor cyklar mellan pharao och slavhandlare
+    dialogStage: 0,
+    dialogTimer: 0,
+    upgradeChoice: null,  // null | 'strong-slave' | 'whip-helper'
+    // Fade-system för world-transition
+    fadeAmount: 0,  // 0=clear, 1=helt svart
+    fadeDir: 0,     // 0=ingen fade, +1=fade out (mörkare), -1=fade in
   };
 
   const CHAT_PHRASES = [
@@ -724,6 +761,7 @@
     { name: 'crack',    duration: 90  },  // 1.5s  pisksmäll med ljusburst
     { name: 'title',    duration: 240 },  // 4.0s  triumf-pose, titel
     { name: 'finale',   duration: 90  },  // 1.5s  fade-to-black
+    { name: 'flee',     duration: 720 },  // 12.0s  NYTT: anime-style massacre + escape
   ];
   const endIntro = {
     active: false,
@@ -744,6 +782,1643 @@
   function easeInQuad(t)  { return t * t; }
   function easeInOut(t)   { return t < 0.5 ? 2*t*t : 1 - Math.pow(-2*t + 2, 2) / 2; }
   function inEndIntro()   { return endIntro.active; }
+
+  // ---------- Level transition (vagnar med slavar — bana 1 start + bana 2 övergång) ----------
+  function startLevelTransition(opts) {
+    if (levelTransition.active) return;
+    opts = opts || {};
+    const targetLevel = opts.level != null ? opts.level : 2;
+    if (opts.fromDebug) {
+      overlay.classList.add('hidden');
+      if (!state.running) state.running = true;
+    }
+    if (targetLevel === 2) {
+      // Hopp direkt in i bana 2-världen (vi är på en ny plats — ingen gamla pyramid att riva)
+      state.level = 2;
+      state.phase = 'building';
+      state.blocksPlaced = 0;
+      state.scaffoldWood = 0;
+      state.blockSettleIdx = -1;
+      state.blockSettleTimer = 0;
+      applyLevelScale();  // sätter större block + byter quarry/waterhole-position
+      // Rensa workers + placera om dem i nya quarry-området
+      for (const w of workers) {
+        w.target = null;
+        w.carrying = false;
+        w.lintelTask = false;
+        w.lintelRole = null;
+        w.lintelPartner = null;
+        w.lintelPhase = null;
+        w.lintelPickupSpot = null;
+        w.lintelTargetIdx = null;
+        w.woodTask = false;
+        w.woodPhase = null;
+        w.crankTask = false;
+        w.crankPhase = null;
+        w.torchTask = false;
+        w.atRestZone = false;
+        w.restSpot = null;
+        w.restZone = null;
+        w.x = quarry.x + 30 + Math.random() * (quarry.w - 60);
+        w.y = quarry.y + quarry.h - 6 + Math.random() * 6;
+      }
+    }
+    levelTransition.active = true;
+    levelTransition.phase = 'wagons-enter';
+    levelTransition.timer = 0;
+    levelTransition.dialogStage = 0;
+    levelTransition.dialogTimer = 0;
+    levelTransition.upgradeChoice = null;
+    levelTransition.targetLevel = targetLevel;
+    levelTransition.meetingX = 320;
+    levelTransition.meetingY = pharaoh.y;
+    // Slav-fördelning: 10 per chariot, fler chariots vid större behov
+    const SLAVES_PER_CHARIOT = 10;
+    const defaultCount = targetLevel === 2 ? 20 : 12;
+    const slaveCount = (opts.slaveCount != null) ? opts.slaveCount : defaultCount;
+    const numChariots = Math.ceil(slaveCount / SLAVES_PER_CHARIOT);
+    // Skapa slumpad typ-pool (cyklar mellan kategorier för variation)
+    const typePool = ['man','man','woman','child','fat','man','woman','child','fat','man'];
+    const allTypes = [];
+    for (let i = 0; i < slaveCount; i++) {
+      allTypes.push(typePool[i % typePool.length]);
+    }
+    // Chariots stackas på olika Y så de syns "under varandra" snett
+    // På bana 1 kör de en lägre "handels-väg" nedanför quarryn (och passerar bakom vattenhålet)
+    const wagonBaseY = (targetLevel === 1) ? 665 : (pharaoh.y + 4);
+    levelTransition.wagons = [];
+    for (let c = 0; c < numChariots; c++) {
+      const types = allTypes.slice(c * SLAVES_PER_CHARIOT, (c + 1) * SLAVES_PER_CHARIOT);
+      const yOffset = c * 30;  // varje chariot stackas snett ner
+      const xStart = -80 - c * 40;   // starta strax utanför synfältet så de kommer in fort
+      levelTransition.wagons.push(makeWagon(xStart, wagonBaseY + yOffset, types));
+    }
+  }
+
+  function makeWagon(x, y, types) {
+    const wagon = {
+      x, y,
+      vx: 0,
+      stopped: false,
+      slaves: [],         // bundna slavar i kö bakom chariot
+      releasedCount: 0,
+      walkPhase: 0,
+    };
+    const SPACING = 18;  // tätare kö så 10 slavar inte sträcker över hela skärmen
+    // Färg-palett som matchar riktiga workers, så det inte finns skillnad vid frisläppning
+    const skinTones = ['#c08850','#a87038','#d49862','#b07840'];
+    const kiltTones = ['#e8d090','#d0b070','#f0e0a0'];
+    const womenKiltTones = ['#f0e8d0','#f4e0b8','#e8d8a8'];
+    for (let i = 0; i < types.length; i++) {
+      const type = types[i];
+      wagon.slaves.push({
+        x: x - 22 - i * SPACING,  // raka linjen bakom chariot
+        y: y + 4 + (i % 2 === 0 ? 0 : 1),
+        type,
+        skin: skinTones[Math.floor(Math.random() * skinTones.length)],
+        kilt: (type === 'woman')
+          ? womenKiltTones[Math.floor(Math.random() * womenKiltTones.length)]
+          : kiltTones[Math.floor(Math.random() * kiltTones.length)],
+        hair: (type === 'woman') ? (Math.random() < 0.7 ? '#1a0e08' : '#3a2010') : null,
+        walkPhase: i * 0.6,
+        released: false,
+        spacing: SPACING,
+        order: i,
+      });
+    }
+    return wagon;
+  }
+
+  function updateLevelTransition() {
+    if (!levelTransition.active) return;
+    const lt = levelTransition;
+    lt.timer++;
+
+    if (lt.phase === 'wagons-enter') {
+      // Chariotsen kör in från vänster, snett-stackade på olika Y
+      let allStopped = true;
+      for (let i = 0; i < lt.wagons.length; i++) {
+        const w = lt.wagons[i];
+        // Snett mål-X: chariot 0 längst fram (höger), nästa lite bakom till vänster
+        const targetX = 360 - i * 50;
+        const dx = targetX - w.x;
+        if (Math.abs(dx) > 1) {
+          w.vx = Math.sign(dx) * Math.min(2.4, Math.abs(dx) * 0.06);
+          w.x += w.vx;
+          w.walkPhase += 0.22;
+          allStopped = false;
+        } else {
+          w.x = targetX;
+          w.vx = 0;
+          w.stopped = true;
+        }
+        // Slavarna följer i rep-kö bakom chariot
+        updateRopedSlaves(w);
+      }
+      if (allStopped) {
+        // Chariotsen står stilla → hoppa direkt till unload (inget prat, inga kort)
+        lt.phase = 'unload';
+        lt.timer = 0;
+      }
+    }
+    else if (lt.phase === 'unload') {
+      updateWhipHelperDismount();
+      // Klipp repet — släpp en slav i taget från slutet av varje kö
+      if (lt.timer % 22 === 0) {
+        for (const w of lt.wagons) {
+          const next = w.slaves.find(s => !s.released);
+          if (next) {
+            next.released = true;
+            w.releasedCount++;
+            // Konvertera till riktig worker — bevara utseendet från slav-fasen
+            const worker = makeWorker(false, next.type);
+            worker.x = next.x;
+            worker.y = next.y;
+            worker.facing = 1;
+            worker.enteringFrom = null;
+            worker.state = 'idle';
+            worker.skin = next.skin;
+            worker.kilt = next.kilt;
+            if (next.hair) worker.hair = next.hair;
+            worker.walkPhase = next.walkPhase;
+            workers.push(worker);
+            spawnFloater(worker.x, worker.y - 30, '𓋹', '#fff0a0');
+            break;  // bara en per tick
+          }
+        }
+      }
+      const allReleased = lt.wagons.every(w => w.slaves.every(s => s.released));
+      if (allReleased) {
+        lt.phase = 'wagons-leave';
+        lt.timer = 0;
+      } else {
+        // Slavarna fortsätter ändå att uppdateras (gå-animation)
+        for (const w of lt.wagons) updateRopedSlaves(w);
+      }
+    }
+    else if (lt.phase === 'wagons-leave') {
+      updateWhipHelperDismount();
+      // Chariotsen sätter fart och kör iväg — snabbare nu när de är tomma
+      let allGone = true;
+      for (const w of lt.wagons) {
+        w.stopped = false;              // hästen ska animera igen
+        w.x += 3.0;                     // rejält tempo iväg
+        w.walkPhase += 0.32;            // ben-cykel matchar farten
+        if (w.x < W + 200) allGone = false;
+      }
+      if (allGone) {
+        lt.active = false;
+        lt.phase = 'done';
+        if (lt.targetLevel === 2) {
+          state.level = 2;
+          state.phase = 'building';
+          // Bana 2 är en NY plats — ingen rivning behövs, applicera skala direkt
+          applyLevelScale();
+        }
+      }
+    }
+  }
+
+  // World-byte: teleportera entities till bana 2-positioner, sätt level 2-state
+  function switchToLevel2World(lt) {
+    // Pharao till vänster-mitt av nya världen
+    pharaoh.x = 100;
+    pharaoh.y = PYR_BASE_Y - 20;
+    pharaoh.vx = 0;
+    pharaoh.vy = 0;
+    // Befintliga workers fördelas i nya världen (slumpas)
+    for (const w of workers) {
+      w.x = quarry.x + 30 + Math.random() * (quarry.w - 60);
+      w.y = quarry.y + quarry.h - 6 + Math.random() * 6;
+      w.target = null;
+      w.carrying = false;
+      w.atRestZone = false;
+      w.restSpot = null;
+      w.restZone = null;
+      // Töm tasks så de börjar om friskt på bana 2
+      w.lintelTask = false;
+      w.lintelRole = null;
+      w.lintelPartner = null;
+      w.lintelPhase = null;
+      w.woodTask = false;
+      w.woodPhase = null;
+      w.crankTask = false;
+      w.crankPhase = null;
+      w.torchTask = false;
+    }
+    // Chariotsen flyttas till samma startposition på höger sida (de "anlände" hit också)
+    for (let i = 0; i < lt.wagons.length; i++) {
+      const w = lt.wagons[i];
+      w.x = W - 100 - i * 40;
+      w.y = pharaoh.y + 4 + i * 34;
+      // Slavar bakom chariot
+      for (let j = 0; j < w.slaves.length; j++) {
+        const s = w.slaves[j];
+        s.x = w.x - 22 - j * s.spacing;
+        s.y = w.y + 4 + (j % 2 === 0 ? 0 : 1);
+      }
+    }
+    // Bana 2-scale på pyramidblock (mer dramatisk)
+    applyLevelScale();
+    // Reset settle
+    state.blockSettleIdx = -1;
+    state.blockSettleTimer = 0;
+  }
+
+  // Pisk-medhjälpare AI — sitter mest i vattnet, sover ibland, ~1-2 piskningar/60 min
+  function updateWhipHelper() {
+    const wh = state.whipHelper;
+    if (!wh) return;
+    wh.cooldown = Math.max(0, wh.cooldown - 1);
+    if (wh.whipTimer == null) wh.whipTimer = 0;
+
+    if (wh.state === 'sitting' || wh.state === 'sleeping') {
+      // Pendla mellan sitting och sleeping ibland
+      if (wh.state === 'sitting' && Math.random() < 0.0015) wh.state = 'sleeping';
+      else if (wh.state === 'sleeping' && Math.random() < 0.0008) wh.state = 'sitting';
+
+      // 1-2 piskningar / 60 min @ 60fps = ~1.5/216000 = 7e-6 per frame, men för game-feel:
+      // ~1 per 3-4 min så spelaren faktiskt ser det hända ibland
+      if (wh.state === 'sitting' && wh.cooldown <= 0 && Math.random() < 0.00012) {
+        // Hitta en slö arbetare att besöka
+        const targets = workers.filter(w => w.state === 'lazy' && w.atRestZone &&
+          Math.hypot(w.x - wh.x, w.y - wh.y) < 600);
+        if (targets.length > 0) {
+          wh.target = targets[Math.floor(Math.random() * targets.length)];
+          wh.state = 'walking-out';
+        }
+      }
+    }
+    else if (wh.state === 'walking-out') {
+      if (!wh.target || wh.target.state !== 'lazy') {
+        wh.state = 'returning'; wh.target = null; return;
+      }
+      const dx = wh.target.x - wh.x, dy = wh.target.y - wh.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 28) {
+        wh.state = 'whipping';
+        wh.whipTimer = 24;
+      } else {
+        const speed = 0.6;  // långsam (han är tjock)
+        wh.x += (dx/d) * speed;
+        wh.y += (dy/d) * speed;
+        wh.facing = dx > 0 ? 1 : -1;
+      }
+    }
+    else if (wh.state === 'whipping') {
+      wh.whipTimer--;
+      if (wh.whipTimer === 18) {
+        // Träffa offret — väck dem som pisk men ingen HP-skada
+        if (wh.target) {
+          wh.target.state = 'idle';
+          wh.target.energy = 100;
+          wh.target.scared = 1.0;
+          wh.target.wakeBoost = 240;
+          wh.target.target = null;
+          wh.target.atRestZone = false;
+          wh.target.restSpot = null;
+          wh.target.restZone = null;
+          wh.target.lazyTarget = null;
+          spawnFloater(wh.target.x, wh.target.y - 30, '𓂀 𓋹!', '#ffe070');
+        }
+      }
+      if (wh.whipTimer <= 0) {
+        wh.state = 'returning';
+        wh.target = null;
+      }
+    }
+    else if (wh.state === 'returning') {
+      const dx = WATERHOLE.cx - wh.x, dy = (WATERHOLE.cy - 6) - wh.y;
+      const d = Math.hypot(dx, dy);
+      if (d < 4) {
+        wh.x = WATERHOLE.cx;
+        wh.y = WATERHOLE.cy - 6;
+        wh.state = 'sitting';
+        wh.cooldown = 900;  // 15 sek vila innan nästa möjliga försök
+      } else {
+        const speed = 0.55;
+        wh.x += (dx/d) * speed;
+        wh.y += (dy/d) * speed;
+        wh.facing = dx > 0 ? 1 : -1;
+      }
+    }
+  }
+
+  // Pisk-medhjälpare (bödel) som sitter i vattenhålet
+  function drawWhipHelper(wh) {
+    if (!wh) return;
+    const x = wh.x, y = wh.y;
+    const bob = Math.sin(state.time * 0.04) * 1.2;
+    const f = wh.facing;
+    // Eftersom han ofta sitter i vatten, halv-nedsänkt: bara övre halvan syns
+    const submerged = wh.state === 'sleeping' || wh.state === 'sitting';
+
+    // Skugga på vattnet (om submerged)
+    if (submerged) {
+      ctx.fillStyle = 'rgba(20,40,30,0.4)';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 8, 22, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+    } else {
+      ctx.fillStyle = 'rgba(0,0,0,0.35)';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 22, 18, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // SUPER-TJOCK kropp (mer än vanlig fat-typ)
+    // Torso (bred och rundad)
+    ctx.fillStyle = '#a87038';  // solbrun
+    ctx.fillRect(x - 14, y - 12 + bob, 28, 14);
+    // Stor utskjutande mage
+    ctx.beginPath();
+    ctx.ellipse(x, y - 2 + bob, 18, 11, 0, 0, Math.PI*2);
+    ctx.fill();
+    // Sido-bulle på facing-sidan
+    ctx.beginPath();
+    ctx.ellipse(x + 8 * f, y - 4 + bob, 8, 7, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Vattenlinje över magen om submerged
+    if (submerged) {
+      ctx.fillStyle = 'rgba(95,168,200,0.55)';
+      ctx.fillRect(x - 20, y + 2 + bob, 40, 14);
+      // Ripples
+      ctx.strokeStyle = 'rgba(255,255,255,0.45)';
+      ctx.lineWidth = 1;
+      ctx.beginPath();
+      ctx.ellipse(x - 8, y + 4 + bob, 6, 1.5, 0, 0, Math.PI*2);
+      ctx.stroke();
+      ctx.beginPath();
+      ctx.ellipse(x + 10, y + 5 + bob, 5, 1.2, 0, 0, Math.PI*2);
+      ctx.stroke();
+    }
+
+    // Pectoral-krage (guld + lapis)
+    ctx.fillStyle = '#a07020';
+    ctx.fillRect(x - 12, y - 12 + bob, 24, 2);
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x - 12, y - 10 + bob, 24, 1);
+
+    // Dubbel-haka under hakan
+    ctx.fillStyle = '#a87038';
+    ctx.beginPath();
+    ctx.ellipse(x, y - 14 + bob, 9, 3, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Huvud (rundat, lite större)
+    ctx.fillStyle = '#a87038';
+    ctx.fillRect(x - 6, y - 24 + bob, 13, 11);
+
+    // Khat-huk (enkel egyptisk linne-wrap, röd-gul-randig) — INTE läder
+    ctx.fillStyle = '#a83020';
+    ctx.fillRect(x - 7, y - 26 + bob, 15, 4);
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(x - 7, y - 23 + bob, 15, 1.5);
+    ctx.fillStyle = '#a83020';
+    ctx.fillRect(x - 7, y - 21 + bob, 15, 1);
+    // Korta nemes-flikar längs sidorna av huvudet
+    ctx.fillStyle = '#a83020';
+    ctx.fillRect(x - 8, y - 21 + bob, 1.5, 7);
+    ctx.fillRect(x + 6.5, y - 21 + bob, 1.5, 7);
+    // Liten knut-detalj framtill (cloth band)
+    ctx.fillStyle = '#7a2010';
+    ctx.fillRect(x - 3, y - 20 + bob, 6, 1.5);
+    // Ansikte: ögon
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(x - 3, y - 18 + bob, 1.5, 1);
+    ctx.fillRect(x + 2, y - 18 + bob, 1.5, 1);
+    // Skägg-stubb
+    ctx.fillStyle = '#3a1808';
+    ctx.fillRect(x - 4, y - 14 + bob, 9, 1);
+
+    // PISK i handen (visa bara när stå/piska, dra in om submerged sover)
+    if (wh.state !== 'sleeping') {
+      // Underarm + hand på facing-sidan
+      ctx.fillStyle = '#a87038';
+      ctx.fillRect(x + 10 * f, y - 8 + bob, 6, 5);
+      // Pisk-handtag
+      ctx.fillStyle = '#5a3010';
+      ctx.fillRect(x + 16 * f, y - 8 + bob, 4 * f, 12);
+      // Pisk-lash
+      ctx.strokeStyle = '#3a2010';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x + 18 * f, y + 4 + bob);
+      // Vid 'whipping' fas: rak ut framåt (piskar)
+      if (wh.state === 'whipping') {
+        ctx.quadraticCurveTo(x + 28 * f, y - 8 + bob, x + 45 * f, y + 2 + bob);
+      } else {
+        // Annars hängande lash
+        ctx.quadraticCurveTo(x + 22 * f, y + 16 + bob, x + 20 * f, y + 24 + bob);
+      }
+      ctx.stroke();
+    }
+
+    // Sova-Z om sleeping
+    if (wh.state === 'sleeping') {
+      ctx.fillStyle = '#ffffff';
+      ctx.strokeStyle = 'rgba(0,0,0,0.6)';
+      ctx.font = 'bold 14px Georgia';
+      ctx.lineWidth = 3;
+      ctx.textAlign = 'center';
+      const sx = x + 14, sy = y - 30 + Math.sin(state.time * 0.07) * 2;
+      ctx.strokeText('z', sx, sy);
+      ctx.fillText('z', sx, sy);
+    }
+  }
+
+  // Sandstorm-effekt på bana 2 — drivande sand-partiklar + lätt orange-dis
+  function drawSandstorm() {
+    // Lätt orange-tonad dis-overlay (sand i luften)
+    ctx.fillStyle = 'rgba(212,160,90,0.10)';
+    ctx.fillRect(0, 0, W, H);
+    // Driv-partiklar — sand som blåser från vänster mot höger
+    ctx.save();
+    const layer1Phase = (state.time * 4) % (W + 100);
+    const layer2Phase = (state.time * 6) % (W + 100);
+    const layer3Phase = (state.time * 3) % (W + 100);
+    // Långsamma stora partiklar i bakgrund
+    ctx.fillStyle = 'rgba(212,168,120,0.35)';
+    for (let i = 0; i < 18; i++) {
+      const px = ((i * 89 + layer1Phase) % (W + 200)) - 50;
+      const py = 80 + ((i * 73) % 540);
+      const wob = Math.sin(state.time * 0.02 + i) * 6;
+      ctx.fillRect(px, py + wob, 3, 1.5);
+    }
+    // Snabba små partiklar i förgrund
+    ctx.fillStyle = 'rgba(232,196,148,0.55)';
+    for (let i = 0; i < 30; i++) {
+      const px = ((i * 67 + layer2Phase) % (W + 200)) - 50;
+      const py = 100 + ((i * 91) % 520);
+      const wob = Math.sin(state.time * 0.05 + i) * 4;
+      ctx.fillRect(px, py + wob, 2, 1);
+    }
+    // Streck-vindar (långa vita strimmor)
+    ctx.strokeStyle = 'rgba(240,220,180,0.25)';
+    ctx.lineWidth = 0.8;
+    for (let i = 0; i < 8; i++) {
+      const px = ((i * 137 + layer3Phase) % (W + 200)) - 50;
+      const py = 120 + ((i * 109) % 480);
+      ctx.beginPath();
+      ctx.moveTo(px, py);
+      ctx.lineTo(px + 12, py - 1);
+      ctx.stroke();
+    }
+    ctx.restore();
+  }
+
+  // Distansyramid (gamla bygget syns från bana 2)
+  function drawDistantOldPyramid(dayPhase) {
+    const cx = 140, baseY = 510;
+    const halfW = 60, height = 65;
+    // Silhuett (mörkare än bakgrunden för djup)
+    const col = mixHex('#a07840', '#1a1208', 1 - dayPhase);
+    ctx.fillStyle = col;
+    ctx.beginPath();
+    ctx.moveTo(cx - halfW, baseY);
+    ctx.lineTo(cx, baseY - height);
+    ctx.lineTo(cx + halfW, baseY);
+    ctx.closePath();
+    ctx.fill();
+    // Skugg-sida (höger sida mörkare)
+    ctx.fillStyle = mixHex('#7a5028', '#0e0804', 1 - dayPhase);
+    ctx.beginPath();
+    ctx.moveTo(cx, baseY - height);
+    ctx.lineTo(cx + halfW, baseY);
+    ctx.lineTo(cx + 2, baseY);
+    ctx.closePath();
+    ctx.fill();
+    // Bas-skugga
+    ctx.fillStyle = 'rgba(20,10,4,0.45)';
+    ctx.beginPath();
+    ctx.ellipse(cx, baseY + 3, halfW + 8, 4, 0, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+  // Avancera dialog ett steg framåt (space-tryck)
+  function advanceDialog() {
+    if (!levelTransition.active || levelTransition.phase !== 'dialog') return false;
+    if (levelTransition.dialogTimer < 12) return true;  // anti-spam
+    levelTransition.dialogStage++;
+    levelTransition.dialogTimer = 0;
+    if (levelTransition.dialogStage >= 3) {
+      levelTransition.phase = 'upgrade-choice';
+      levelTransition.timer = 0;
+    }
+    return true;
+  }
+
+  // Tillämpa roguelike-uppgradering — denna funktion utökas i nästa runda med faktiska effekter
+  function applyUpgrade(choice) {
+    if (choice === 'strong-slave') {
+      // TODO: spawna en superstark slav (snabbare, mer HP, kan bära ensam även på bana 2)
+      const w = makeWorker(false, 'fat');
+      w.x = pharaoh.x;
+      w.y = pharaoh.y + 20;
+      w.facing = 1;
+      w.enteringFrom = null;
+      w.state = 'idle';
+      w.hp = 200;        // 2x normal HP
+      w.energy = 100;
+      w.workEthic = 0.35; // arbetsmyra — sällan trött
+      w.speedMul = 1.3;   // 30% snabbare
+      w.isStrongSlave = true;  // flagga för framtida specialhantering
+      workers.push(w);
+      spawnFloater(w.x, w.y - 40, '𓌂', '#ffd048');
+    } else if (choice === 'whip-helper') {
+      // Tjocken stiger av första chariotens skytt-plats och vandrar mot vattnet
+      const lt = levelTransition;
+      const w0 = lt.wagons[0];
+      if (w0) {
+        w0.helperPhase = 'boarded';   // 'boarded' | 'walking' | 'arrived'
+        w0.helperTimer = 60;          // 1 sek pause så spelaren ser honom
+        w0.helperX = w0.x + 2;        // skytt-position på chariot
+        w0.helperY = w0.y - 18;
+        w0.helperWalkPhase = 0;
+      }
+      spawnFloater(w0 ? w0.x : WATERHOLE.cx, (w0 ? w0.y : WATERHOLE.cy) - 30, '𓀀!', '#ff8048');
+    }
+  }
+  // Uppdaterar dismount-animationen (anropas under unload + wagons-leave)
+  function updateWhipHelperDismount() {
+    const lt = levelTransition;
+    for (const w of lt.wagons) {
+      if (!w.helperPhase || w.helperPhase === 'arrived') continue;
+      if (w.helperPhase === 'boarded') {
+        w.helperTimer = (w.helperTimer || 0) - 1;
+        // Följer chariotens position (om den fortfarande rör sig)
+        w.helperX = w.x + 2;
+        w.helperY = w.y - 18;
+        if (w.helperTimer <= 0) {
+          w.helperPhase = 'walking';
+          // Hoppa av åt vänster sida av chariot (motsatt färd-riktningen)
+          w.helperX = w.x - 24;
+          w.helperY = w.y + 6;
+        }
+      } else if (w.helperPhase === 'walking') {
+        const tx = WATERHOLE.cx, ty = WATERHOLE.cy - 6;
+        const dx = tx - w.helperX, dy = ty - w.helperY;
+        const d = Math.hypot(dx, dy);
+        w.helperWalkPhase += 0.16;
+        if (d < 6) {
+          w.helperPhase = 'arrived';
+          // Aktivera den autonoma whipHelper-NPC:n
+          state.whipHelper = {
+            x: WATERHOLE.cx,
+            y: WATERHOLE.cy - 6,
+            state: 'sitting',
+            cooldown: 600,
+            whipPhase: 0,
+            facing: 1,
+          };
+        } else {
+          const speed = 0.55;
+          w.helperX += (dx/d) * speed;
+          w.helperY += (dy/d) * speed;
+          w.helperFacing = dx > 0 ? 1 : -1;
+        }
+      }
+    }
+  }
+
+  // Slavarna i rep-kö följer chariot — varje hänger ~spacing px bakom föregående
+  function updateRopedSlaves(wagon) {
+    for (let i = 0; i < wagon.slaves.length; i++) {
+      const s = wagon.slaves[i];
+      if (s.released) continue;
+      const prevX = i === 0 ? wagon.x - 22 : wagon.slaves[i-1].x;
+      const targetX = prevX - s.spacing;
+      const dx = targetX - s.x;
+      const step = Math.sign(dx) * Math.min(1.1, Math.abs(dx) * 0.08);
+      s.x += step;
+      if (Math.abs(dx) > 0.5) s.walkPhase += 0.18;
+    }
+  }
+
+  // Returnerar hur många pixlar vagnen ska sjunka ner om hjulen är över vattenhålet
+  function wagonWaterSink(wx, wy) {
+    const ndx = (wx - WATERHOLE.cx) / WATERHOLE.rx;
+    if (ndx < -1 || ndx > 1) return 0;
+    // Vagnens hjul finns vid wy+6..wy+10 — kolla om det Y-intervallet är innanför ellipsen
+    const halfChord = Math.sqrt(1 - ndx*ndx) * WATERHOLE.ry;
+    const waterTopAtX = WATERHOLE.cy - halfChord;
+    const wheelBaseline = wy + 8;
+    if (wheelBaseline < waterTopAtX - 2) return 0;
+    // Sjunk-djup upp till 5 px, mjuk ramp in/ut vid kanterna
+    const edgeFade = 1 - Math.abs(ndx);   // 0 vid kanten, 1 i mitten
+    return Math.min(5, 3 + edgeFade * 3);
+  }
+
+  function drawWagon(wagon) {
+    // Om vagnen kör över vattenhålet — sjunk ner en aning och rita krusningar
+    const sink = wagonWaterSink(wagon.x, wagon.y);
+    const x = wagon.x, y = wagon.y + sink;
+    // Chariot moves RIGHTWARD — horse is at FRONT (right side), pulling.
+    // Slaves trail behind (left). Layout (left → right):
+    //   [slaves] → [chariot body] → [horse] → direction-of-travel
+    if (sink > 0) {
+      // Vatten-krusningar runt hjulen (mörkare ju djupare)
+      const t = state.time * 0.15 + wagon.walkPhase;
+      ctx.strokeStyle = 'rgba(255,255,255,0.55)';
+      ctx.lineWidth = 1.2;
+      for (let side = -1; side <= 1; side += 2) {
+        const rx = 10 + Math.sin(t + side) * 1.5;
+        ctx.beginPath();
+        ctx.ellipse(x + side * 12, y + 8, rx, 2.4, 0, 0, Math.PI*2);
+        ctx.stroke();
+      }
+      // Skum vid front (framför hästen)
+      ctx.beginPath();
+      ctx.ellipse(x + 60, y + 10, 12 + Math.sin(t)*2, 2.6, 0, 0, Math.PI*2);
+      ctx.stroke();
+    } else {
+      // Skugga (bara när ej i vatten)
+      ctx.fillStyle = 'rgba(0,0,0,0.3)';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 18, 42, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // Hjul (2)
+    drawWagonWheel(x - 12, y + 6, wagon.walkPhase);
+    drawWagonWheel(x + 12, y + 6, wagon.walkPhase);
+
+    // Chariot-platta (öppen vagn — golv)
+    ctx.fillStyle = '#7a4818';
+    ctx.fillRect(x - 20, y - 2, 38, 5);
+    ctx.fillStyle = '#5a3010';
+    ctx.fillRect(x - 20, y + 3, 38, 2);
+
+    // Bröstvärn (FRAMME, dvs HÖGER sida — krigaren står bakom det)
+    // Höger framvägg (D-formad i ancient-egyptian-stil)
+    ctx.fillStyle = '#7a4818';
+    ctx.fillRect(x + 6, y - 16, 12, 14);   // främre del — full höjd
+    // Sidovägg som lutar ner mot bakre delen
+    ctx.beginPath();
+    ctx.moveTo(x - 20, y - 6);
+    ctx.lineTo(x + 6, y - 16);
+    ctx.lineTo(x + 6, y - 2);
+    ctx.lineTo(x - 20, y - 2);
+    ctx.closePath();
+    ctx.fill();
+    // Guld + röd + blå dekor på framväggen (höger sida)
+    ctx.fillStyle = '#a07020';
+    ctx.fillRect(x + 6, y - 16, 12, 1.5);  // guld topp
+    ctx.fillStyle = '#a83020';
+    ctx.fillRect(x + 6, y - 13, 12, 1.5);
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x + 6, y - 10, 12, 1.5);
+    // Eye-of-Horus på framväggen
+    ctx.fillStyle = '#f4d050';
+    ctx.font = 'bold 8px "Noto Sans Egyptian Hieroglyphs",Georgia';
+    ctx.textAlign = 'center';
+    ctx.textBaseline = 'middle';
+    ctx.fillText('𓂀', x + 12, y - 6);
+    ctx.textBaseline = 'alphabetic';
+
+    // Drag-stänger (yoke poles) från chariot fram till hästen
+    ctx.strokeStyle = '#5a3818';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.moveTo(x + 18, y - 1);
+    ctx.lineTo(x + 38, y - 3);
+    ctx.moveTo(x + 18, y + 1);
+    ctx.lineTo(x + 38, y - 1);
+    ctx.stroke();
+
+    // Häst — drar chariot FRAMÅT (höger)
+    drawWagonHorse(x + 54, y, wagon.walkPhase, wagon.stopped);
+
+    // Pil-koger på chariotens vänstra sida — typisk egyptisk krigsvagns-utrustning
+    ctx.fillStyle = '#7a4818';
+    ctx.fillRect(x - 22, y - 10, 4, 12);  // koger-fodral
+    ctx.fillStyle = '#a07020';
+    ctx.fillRect(x - 22, y - 10, 4, 1.5);  // guld-fäste
+    // Pilfjädrar som sticker ut upptill
+    ctx.fillStyle = '#e8d8b0';
+    ctx.fillRect(x - 21, y - 14, 1, 4);
+    ctx.fillRect(x - 20, y - 13, 1, 3);
+    ctx.fillRect(x - 19, y - 14, 1, 4);
+
+    // TVÅ krigare i chariot — Egyptiska krigsvagnar hade alltid en driver + en skytt
+    // Förare (vänster, lägre — håller tyglarna)
+    drawCharioteer(x - 12, y - 16, wagon.stopped, wagon.walkPhase);
+    // Skytt/krigare (höger, framme — kastar spjut/skjuter)
+    drawWarrior(x + 2, y - 18, wagon.stopped, wagon.walkPhase);
+  }
+
+  // Förare/charioteer — något mindre profil, håller tyglar mot hästen
+  function drawCharioteer(x, y, stopped, phase) {
+    const bob = stopped ? 0 : Math.sin(phase + 0.5) * 1.0;
+    // Bar överkropp
+    ctx.fillStyle = '#a87038';
+    ctx.fillRect(x - 4, y - 3 + bob, 8, 6);
+    // Pectoral-krage
+    ctx.fillStyle = '#a07020';
+    ctx.fillRect(x - 5, y - 3 + bob, 10, 1.2);
+    // Huvud
+    ctx.fillStyle = '#a87038';
+    ctx.fillRect(x - 3, y - 11 + bob, 7, 8);
+    // Nemes-huk
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x - 4, y - 14 + bob, 9, 5);
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(x - 4, y - 11 + bob, 9, 1);
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x - 4, y - 9 + bob, 9, 1);
+    // Nemes-flikar
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x - 5, y - 11 + bob, 1, 7);
+    ctx.fillRect(x + 4, y - 11 + bob, 1, 7);
+    // Öga
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(x + 1, y - 8 + bob, 1.2, 0.8);
+    // TYGLAR (reins) — från händerna upp till hästen
+    ctx.strokeStyle = '#5a3010';
+    ctx.lineWidth = 0.8;
+    ctx.beginPath();
+    ctx.moveTo(x + 4, y - 1 + bob);
+    ctx.lineTo(x + 38, y - 2);   // upp mot hästens munstycke
+    ctx.moveTo(x + 4, y + 0 + bob);
+    ctx.lineTo(x + 38, y - 1);
+    ctx.stroke();
+  }
+
+  function drawWarrior(x, y, stopped, phase) {
+    const bob = stopped ? 0 : Math.sin(phase) * 1.2;
+    // Subtil "drag"-puls i skjut-positionen (sträng-spänning vibrerar)
+    const drawPulse = Math.sin(state.time * 0.08) * 0.5;
+
+    // Bar överkropp (typiskt egyptisk soldat, varmt klimat)
+    ctx.fillStyle = '#a87038';  // solbrun hud
+    ctx.fillRect(x - 4, y - 4 + bob, 9, 7);
+    // Pectoral-krage (bred halskedja i guld + lapis)
+    ctx.fillStyle = '#a07020';
+    ctx.fillRect(x - 5, y - 4 + bob, 11, 1.5);
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x - 5, y - 2.5 + bob, 11, 0.8);
+
+    // Huvud — vrider sig något åt höger (sikt-linje längs bågen)
+    ctx.fillStyle = '#a87038';
+    ctx.fillRect(x - 3, y - 12 + bob, 7, 8);
+    // Egyptisk nemes-huk
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x - 4, y - 15 + bob, 9, 5);
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(x - 4, y - 12 + bob, 9, 1);
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x - 4, y - 10 + bob, 9, 1);
+    // Uraeus (kobra) på pannan
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(x, y - 16 + bob, 1.5, 2.5);
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x - 0.5, y - 17 + bob, 2.5, 1);
+    // Nemes-flikar
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x - 5, y - 12 + bob, 1, 8);
+    ctx.fillRect(x + 4, y - 12 + bob, 1, 8);
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(x - 5, y - 9 + bob, 1, 1);
+    ctx.fillRect(x + 4, y - 9 + bob, 1, 1);
+    // Kohl-mörklagt öga (mot målet — höger)
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(x + 2, y - 9 + bob, 1.5, 0.8);
+
+    // --- SKJUT-POSE: båda armar tydliga ---
+    // Längre framräckande arm (bow-arm) — sträcker sig långt åt höger med bågen
+    const bowX = x + 18;
+    const bowY = y - 4 + bob;
+    // Främre arm (skuldra → handled vid bågen)
+    ctx.strokeStyle = '#a87038';
+    ctx.lineWidth = 2.5;
+    ctx.lineCap = 'round';
+    ctx.beginPath();
+    ctx.moveTo(x + 4, y - 4 + bob);
+    ctx.lineTo(bowX, bowY);
+    ctx.stroke();
+    // Bow-hand
+    ctx.fillStyle = '#a87038';
+    ctx.beginPath();
+    ctx.arc(bowX, bowY, 1.8, 0, Math.PI*2);
+    ctx.fill();
+
+    // Bakre arm — dragen tillbaka mot örat (drar strängen)
+    const drawX = x - 1;
+    const drawY = y - 6 + bob + drawPulse;
+    ctx.strokeStyle = '#a87038';
+    ctx.lineWidth = 2.5;
+    ctx.beginPath();
+    ctx.moveTo(x - 3, y - 4 + bob);
+    ctx.lineTo(drawX, drawY);
+    ctx.stroke();
+    // Dragar-handen
+    ctx.fillStyle = '#a87038';
+    ctx.beginPath();
+    ctx.arc(drawX, drawY, 1.5, 0, Math.PI*2);
+    ctx.fill();
+    ctx.lineCap = 'butt';
+
+    // Composite bow — krökt åt rätt håll mot målet (höger)
+    ctx.strokeStyle = '#3a2010';
+    ctx.lineWidth = 2;
+    ctx.beginPath();
+    // Båg-stommen är en lång C-kurva — top och bot tip riktar bakåt
+    ctx.arc(bowX, bowY, 11, -Math.PI * 0.42, Math.PI * 0.42, false);
+    ctx.stroke();
+    // Bågens inre detaljer — guld-omslagna ändar (typisk komposit-båge)
+    ctx.fillStyle = '#a07020';
+    const tipTopX = bowX + 11 * Math.cos(-Math.PI*0.42);
+    const tipTopY = bowY + 11 * Math.sin(-Math.PI*0.42);
+    const tipBotX = bowX + 11 * Math.cos(Math.PI*0.42);
+    const tipBotY = bowY + 11 * Math.sin(Math.PI*0.42);
+    ctx.fillRect(tipTopX - 1, tipTopY - 1, 2, 2);
+    ctx.fillRect(tipBotX - 1, tipBotY - 1, 2, 2);
+
+    // Båg-sträng — DRAGEN bakåt mot ansiktet (V-form mellan tips och draw-hand)
+    ctx.strokeStyle = '#e0d090';
+    ctx.lineWidth = 0.7;
+    ctx.beginPath();
+    ctx.moveTo(tipTopX, tipTopY);
+    ctx.lineTo(drawX, drawY);
+    ctx.lineTo(tipBotX, tipBotY);
+    ctx.stroke();
+
+    // PILEN — på strängen, riktad mot målet (genom båg-handen, sträcker sig framåt)
+    ctx.strokeStyle = '#7a5028';
+    ctx.lineWidth = 1.2;
+    ctx.beginPath();
+    ctx.moveTo(drawX, drawY);
+    ctx.lineTo(bowX + 7, bowY);
+    ctx.stroke();
+    // Pil-spets (vass, framtill)
+    ctx.fillStyle = '#b0b0b0';
+    ctx.beginPath();
+    ctx.moveTo(bowX + 7, bowY - 1.5);
+    ctx.lineTo(bowX + 11, bowY);
+    ctx.lineTo(bowX + 7, bowY + 1.5);
+    ctx.closePath();
+    ctx.fill();
+    // Pil-fjädrar bak (vid draw-hand) — vita med röd kant
+    ctx.fillStyle = '#e8d8b0';
+    ctx.fillRect(drawX - 0.5, drawY - 2, 1.5, 4);
+    ctx.fillStyle = '#a83020';
+    ctx.fillRect(drawX - 0.5, drawY - 2, 1.5, 1);
+    ctx.fillRect(drawX - 0.5, drawY + 1, 1.5, 1);
+  }
+
+  function drawRopedSlaves(wagon) {
+    // Rep från chariotens bak genom alla obundna slavar
+    const points = [];
+    points.push({ x: wagon.x - 20, y: wagon.y - 4 });
+    for (const s of wagon.slaves) {
+      if (s.released) continue;
+      points.push({ x: s.x, y: s.y - 8 });
+    }
+    if (points.length > 1) {
+      ctx.strokeStyle = '#7a5028';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(points[0].x, points[0].y);
+      for (let i = 1; i < points.length; i++) {
+        // Lite sag (sänka) mellan punkterna för realism
+        const px = (points[i-1].x + points[i].x) / 2;
+        const py = (points[i-1].y + points[i].y) / 2 + 2;
+        ctx.quadraticCurveTo(px, py, points[i].x, points[i].y);
+      }
+      ctx.stroke();
+    }
+    // Rita varje obunden slav
+    for (const s of wagon.slaves) {
+      if (s.released) continue;
+      drawRopedSlave(s);
+    }
+  }
+
+  function drawRopedSlave(s) {
+    // Samma dimensioner som drawWorker walking-pose — armar bundna längs sidorna
+    const x = s.x, y = s.y;
+    const legSwing = Math.sin(s.walkPhase) * 3;
+    const bob = Math.sin(s.walkPhase) * 2;
+    const isChild = s.type === 'child';
+    const isFat = s.type === 'fat';
+    const isWoman = s.type === 'woman';
+
+    // Skugga — samma bredd som worker
+    ctx.fillStyle = 'rgba(0,0,0,0.25)';
+    ctx.beginPath();
+    const shadowW = isFat ? 14 : (isChild ? 8 : 11);
+    ctx.ellipse(x, y + 16, shadowW, 3, 0, 0, Math.PI*2);
+    ctx.fill();
+
+    // Samma skal-skala som drawWorker (child = 0.72, fat = 1.22 x, 0.98 y)
+    ctx.save();
+    if (isChild) {
+      ctx.translate(x, y + 22);
+      ctx.scale(0.72, 0.72);
+      ctx.translate(-x, -(y + 22));
+    } else if (isFat) {
+      ctx.translate(x, y + 22);
+      ctx.scale(1.22, 0.98);
+      ctx.translate(-x, -(y + 22));
+    }
+
+    // Ben (samma som worker)
+    ctx.fillStyle = s.skin;
+    ctx.fillRect(x - 4, y + 4, 4, 12 + legSwing);
+    ctx.fillRect(x + 0, y + 4, 4, 12 - legSwing);
+
+    // Klädsel — kvinnor lång dräkt, andra kort kilt (samma som worker)
+    ctx.fillStyle = s.kilt;
+    if (isWoman) {
+      ctx.fillRect(x - 8, y - 4, 16, 18);
+      ctx.fillStyle = '#c89860';
+      ctx.fillRect(x - 8, y + 6, 16, 2);
+    } else {
+      ctx.fillRect(x - 7, y - 2, 14, 8);
+    }
+
+    // Torso (samma som worker walking)
+    ctx.fillStyle = s.skin;
+    if (isFat) {
+      ctx.fillRect(x - 10, y - 12 + bob, 20, 12);
+      ctx.beginPath();
+      ctx.ellipse(x, y - 2 + bob, 14, 9, 0, 0, Math.PI*2);
+      ctx.fill();
+      ctx.fillStyle = s.skin;
+      ctx.beginPath();
+      ctx.ellipse(x, y - 13 + bob, 7, 2.5, 0, 0, Math.PI*2);  // dubbel-haka
+      ctx.fill();
+    } else {
+      ctx.fillRect(x - 6, y - 12 + bob, 12, 11);
+    }
+
+    // Armar bundna längs sidorna (INTE utsträckta som normal worker)
+    ctx.fillStyle = s.skin;
+    ctx.fillRect(x - 8, y - 10 + bob, 3, 12);
+    ctx.fillRect(x + 5, y - 10 + bob, 3, 12);
+
+    // Huvud (samma som worker)
+    ctx.fillStyle = s.skin;
+    ctx.fillRect(x - 5, y - 22 + bob, 10, 10);
+
+    // Hår
+    if (isWoman && s.hair) {
+      ctx.fillStyle = s.hair;
+      ctx.fillRect(x - 6, y - 22 + bob, 2, 14);
+      ctx.fillRect(x + 4, y - 22 + bob, 2, 14);
+      ctx.fillRect(x - 6, y - 24 + bob, 12, 3);
+      ctx.fillStyle = '#a07020';  // linnehårband (inte guld — de är slavar)
+      ctx.fillRect(x - 6, y - 22 + bob, 12, 1);
+    } else if (isChild) {
+      ctx.fillStyle = '#1a0e08';
+      ctx.fillRect(x - 5, y - 24 + bob, 10, 3);
+    }
+
+    // Trötta/sänkta ögon
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(x - 3, y - 17 + bob, 2, 1.5);
+    ctx.fillRect(x + 1, y - 17 + bob, 2, 1.5);
+
+    // Rep runt handlederna (framför kilten)
+    ctx.strokeStyle = '#7a5028';
+    ctx.lineWidth = 1.4;
+    ctx.beginPath();
+    ctx.moveTo(x - 8, y + 1 + bob);
+    ctx.lineTo(x + 8, y + 1 + bob);
+    ctx.stroke();
+
+    // Rep runt halsen där rep-linjen ansluter
+    ctx.beginPath();
+    ctx.ellipse(x, y - 11 + bob, 5, 1.8, 0, 0, Math.PI*2);
+    ctx.stroke();
+
+    ctx.restore();
+  }
+
+  function drawWagonHorse(x, y, phase, stopped) {
+    const swing = stopped ? 0 : Math.sin(phase) * 3;
+    // Smal arab-häst typisk för antika egyptiska krigsvagnar
+    // Kropp (slank)
+    ctx.fillStyle = '#7a3a18';
+    ctx.fillRect(x - 14, y - 8, 28, 10);
+    ctx.fillStyle = '#5a2810';
+    ctx.fillRect(x - 14, y + 0, 28, 2);
+    // Hals (lutar uppåt mot huvudet)
+    ctx.beginPath();
+    ctx.moveTo(x + 8, y - 8);
+    ctx.lineTo(x + 18, y - 16);
+    ctx.lineTo(x + 18, y - 6);
+    ctx.lineTo(x + 12, y - 2);
+    ctx.closePath();
+    ctx.fill();
+    // Huvud (framåt-tippat)
+    ctx.fillStyle = '#7a3a18';
+    ctx.fillRect(x + 16, y - 18, 11, 9);
+    // Mule
+    ctx.fillStyle = '#3a1808';
+    ctx.fillRect(x + 24, y - 11, 4, 3);
+    // Näsborrar
+    ctx.fillStyle = '#1a0404';
+    ctx.fillRect(x + 25, y - 10, 1, 1);
+    // Öron (smala)
+    ctx.fillStyle = '#7a3a18';
+    ctx.beginPath();
+    ctx.moveTo(x + 18, y - 18);
+    ctx.lineTo(x + 19, y - 23);
+    ctx.lineTo(x + 20, y - 18);
+    ctx.closePath();
+    ctx.fill();
+    ctx.beginPath();
+    ctx.moveTo(x + 22, y - 18);
+    ctx.lineTo(x + 23, y - 23);
+    ctx.lineTo(x + 24, y - 18);
+    ctx.closePath();
+    ctx.fill();
+    // Öga
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(x + 23, y - 14, 1.5, 1.5);
+    // Egyptisk plym/fjäder-prydnad på huvudet (röd + guld)
+    ctx.fillStyle = '#a83020';
+    ctx.fillRect(x + 20, y - 28, 2, 6);
+    ctx.fillRect(x + 18, y - 26, 6, 1);
+    ctx.fillStyle = '#f4d050';
+    ctx.fillRect(x + 19, y - 30, 4, 3);
+    // Man (mane) — kort egyptisk klippt, blå-vit-randig
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x + 6, y - 12, 11, 2);
+    ctx.fillStyle = '#e8d8b0';
+    ctx.fillRect(x + 6, y - 10, 11, 1);
+    ctx.fillStyle = '#1a4090';
+    ctx.fillRect(x + 6, y - 9, 11, 1);
+    // Bridle/huvudtygsel — guld + röd
+    ctx.strokeStyle = '#a07020';
+    ctx.lineWidth = 1;
+    ctx.beginPath();
+    ctx.moveTo(x + 16, y - 14);
+    ctx.lineTo(x + 26, y - 11);
+    ctx.stroke();
+    ctx.fillStyle = '#a83020';
+    ctx.fillRect(x + 20, y - 14, 1.5, 1.5);  // röd ros-rosett
+    // Ben (4) — trav-mönster: diagonala par lyfter tillsammans
+    // legLift: 0..~4 px höjning av foten vid upp-slag i cykeln
+    const legA = stopped ? 0 : Math.max(0, Math.sin(phase) * 5);
+    const legB = stopped ? 0 : Math.max(0, Math.sin(phase + Math.PI) * 5);
+    // legOffX: benet svänger också lite framåt/bakåt (steglängd)
+    const swingA = stopped ? 0 : Math.sin(phase) * 2;
+    const swingB = stopped ? 0 : Math.sin(phase + Math.PI) * 2;
+    ctx.fillStyle = '#5a2810';
+    // Bakre par: leg0 (bak-vänster) + leg3 (fram-höger) = fas A
+    // Främre par: leg1 (bak-höger) + leg2 (fram-vänster) = fas B (180° ur fas)
+    ctx.fillRect(x - 10 + swingA, y + 2, 2.5, 10 - legA);
+    ctx.fillRect(x - 3 + swingB, y + 2, 2.5, 10 - legB);
+    ctx.fillRect(x + 5 + swingB, y + 2, 2.5, 10 - legB);
+    ctx.fillRect(x + 12 + swingA, y + 2, 2.5, 10 - legA);
+    // Hovar följer benen (bottnas position höjs vid legLift)
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(x - 10 + swingA, y + 12 - legA, 2.5, 1.5);
+    ctx.fillRect(x - 3 + swingB, y + 12 - legB, 2.5, 1.5);
+    ctx.fillRect(x + 5 + swingB, y + 12 - legB, 2.5, 1.5);
+    ctx.fillRect(x + 12 + swingA, y + 12 - legA, 2.5, 1.5);
+    // Svans (lång, vajande)
+    const tailSwing = Math.sin(phase * 0.7) * 2;
+    ctx.fillStyle = '#3a1810';
+    ctx.fillRect(x - 16, y - 6, 2, 10 + tailSwing);
+    ctx.fillRect(x - 17, y + 2, 2, 6);
+  }
+
+  function drawWagonWheel(x, y, rot) {
+    // Ljust trä-hjul typisk egyptiskt — tunna 4-ekrar
+    ctx.strokeStyle = '#3a2010';
+    ctx.lineWidth = 1.8;
+    ctx.beginPath();
+    ctx.arc(x, y, 9, 0, Math.PI*2);
+    ctx.stroke();
+    // Inre ring för djup
+    ctx.lineWidth = 0.8;
+    ctx.strokeStyle = '#7a5028';
+    ctx.beginPath();
+    ctx.arc(x, y, 8, 0, Math.PI*2);
+    ctx.stroke();
+    // 4 ekrar (autentisk antik egyptiskt — Tuthankhamons chariot hade 4)
+    ctx.lineWidth = 1.4;
+    ctx.strokeStyle = '#5a3818';
+    for (let i = 0; i < 4; i++) {
+      const a = rot + i * Math.PI/2;
+      ctx.beginPath();
+      ctx.moveTo(x, y);
+      ctx.lineTo(x + Math.cos(a)*8, y + Math.sin(a)*8);
+      ctx.stroke();
+    }
+    // Guld-nav i mitten
+    ctx.fillStyle = '#a07020';
+    ctx.beginPath();
+    ctx.arc(x, y, 2.5, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#3a2010';
+    ctx.beginPath();
+    ctx.arc(x, y, 1, 0, Math.PI*2);
+    ctx.fill();
+  }
+
+
+  function drawLevelTransition() {
+    if (!levelTransition.active) return;
+    const lt = levelTransition;
+    // Rita slav-köerna (rep + bundna slavar) bakom chariotsen
+    for (const w of lt.wagons) {
+      drawRopedSlaves(w);
+    }
+    // Sedan chariotsen + krigarna ovanpå
+    for (const w of lt.wagons) {
+      drawWagon(w);
+    }
+
+    // Dialog-bubblor (pharao + krigare) under dialog-fasen
+    if (lt.phase === 'dialog') {
+      drawDialogBubbles(lt);
+    }
+    // Upgrade-choice UI
+    if (lt.phase === 'upgrade-choice') {
+      drawUpgradeChoice(lt);
+    }
+    // Hint till spelaren att gå fram
+    if (lt.phase === 'awaiting-pharaoh') {
+      drawApproachHint(lt);
+    }
+    // Fade-overlay (world-transition)
+    if (lt.fadeAmount > 0) {
+      ctx.fillStyle = `rgba(8,4,2,${lt.fadeAmount})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  function drawApproachHint(lt) {
+    const lead = lt.wagons[0];
+    if (!lead) return;
+    // Liten pil ovanför chariot som pulsar
+    const pulse = 0.5 + Math.sin(state.time * 0.08) * 0.3;
+    ctx.fillStyle = `rgba(255,224,80,${pulse})`;
+    ctx.font = 'bold 24px Georgia';
+    ctx.textAlign = 'center';
+    ctx.strokeStyle = 'rgba(40,20,8,0.7)';
+    ctx.lineWidth = 3;
+    ctx.strokeText('↓', lead.x, lead.y - 50);
+    ctx.fillText('↓', lead.x, lead.y - 50);
+  }
+
+  function drawDialogBubbles(lt) {
+    const stage = lt.dialogStage;
+    const lead = lt.wagons[0];
+    if (!lead) return;
+
+    // Bubble centralt på skärmen
+    const bx = W / 2;
+    const by = H / 2 - 80;
+
+    // Talare beroende på stage: pharao oro → krigaren förklarar → krigaren erbjuder val
+    let speakerX, speakerY;
+    if (stage === 0) {
+      speakerX = pharaoh.x;
+      speakerY = pharaoh.y;
+    } else {
+      speakerX = lead.x;
+      speakerY = lead.y;
+    }
+
+    const drawSpacePrompt = () => {
+      // Space-prompt INUTI bubblan längst ner
+      if (lt.dialogTimer < 24) return;
+      ctx.fillStyle = `rgba(120,80,40,${0.6 + Math.sin(state.time * 0.08) * 0.25})`;
+      ctx.font = 'bold 8px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillText('press SPACE-BAR to continue', 0, 46);
+    };
+
+    if (stage === 0) {
+      // Pharaos oro — bara stora svart-krokodilen från end-intro + ett stort "!"
+      drawPanelBubble(bx, by, speakerX, speakerY, () => {
+        // Mörk end-intro-krokodil centralt
+        drawTinyCroc(-10, 8);
+        // Stort utropstecken efter
+        ctx.fillStyle = '#a01010';
+        ctx.strokeStyle = 'rgba(20,8,4,0.9)';
+        ctx.lineWidth = 3;
+        ctx.font = 'bold 36px Georgia';
+        ctx.textAlign = 'center';
+        ctx.strokeText('!', 28, 16);
+        ctx.fillText('!', 28, 16);
+        drawSpacePrompt();
+      });
+    } else if (stage === 1) {
+      // Slavhandlaren: dessa starka slavar kommer spöa de svarta krokodilerna
+      drawPanelBubble(bx, by, speakerX, speakerY, () => {
+        // Två starka slavar med näve-pose
+        drawTinyHuman(-50, 8, '#a87038', true);
+        drawTinyHuman(-30, 8, '#c08850', true);
+        // Defeated mörk end-intro-krokodil
+        drawTinyCroc(28, 18, true);
+        // Slag-stjärnor runt kampen
+        ctx.fillStyle = '#ffd040';
+        for (let i = 0; i < 5; i++) {
+          const ang = i * (Math.PI * 2 / 5);
+          ctx.fillRect(10 + Math.cos(ang)*10, 6 + Math.sin(ang)*8, 3, 3);
+        }
+        // Hieroglyf-text under
+        ctx.fillStyle = '#3a1810';
+        ctx.font = 'bold 12px "Noto Sans Egyptian Hieroglyphs",Georgia';
+        ctx.textAlign = 'center';
+        ctx.fillText('𓀀  𓂝  𓆊  ✓', 0, 32);
+        drawSpacePrompt();
+      });
+    } else {
+      // Krigaren erbjuder val
+      drawPanelBubble(bx, by, speakerX, speakerY, () => {
+        ctx.font = 'bold 28px "Noto Sans Egyptian Hieroglyphs",Georgia';
+        ctx.textAlign = 'center';
+        ctx.fillStyle = '#3a1810';
+        ctx.fillText('𓊪 𓏏 ?', 0, 4);
+        ctx.fillStyle = '#5a3010';
+        ctx.font = '11px Georgia';
+        ctx.fillText('(choose your help)', 0, 24);
+        drawSpacePrompt();
+      });
+    }
+  }
+
+  // Liten människa-illustration för pratbubblor
+  function drawTinyHuman(cx, cy, skin, strong) {
+    // Ben
+    ctx.fillStyle = skin;
+    ctx.fillRect(cx - 3, cy + 2, 2, 7);
+    ctx.fillRect(cx + 1, cy + 2, 2, 7);
+    // Kilt
+    ctx.fillStyle = '#a87830';
+    ctx.fillRect(cx - 4, cy - 2, 8, 5);
+    // Torso (bredare om strong)
+    ctx.fillStyle = skin;
+    if (strong) {
+      ctx.fillRect(cx - 5, cy - 9, 10, 8);
+      ctx.beginPath();
+      ctx.ellipse(cx, cy - 4, 6, 4, 0, 0, Math.PI*2);
+      ctx.fill();
+    } else {
+      ctx.fillRect(cx - 3, cy - 9, 6, 8);
+    }
+    // Huvud
+    ctx.fillRect(cx - 3, cy - 16, 6, 6);
+    // Armar
+    if (strong) {
+      // Knytnävar uppe (slå-pose)
+      ctx.fillRect(cx - 6, cy - 12, 2, 6);
+      ctx.fillRect(cx + 4, cy - 12, 2, 6);
+      ctx.fillStyle = '#7a3010';  // svart-blå knytnävar
+      ctx.fillRect(cx - 7, cy - 14, 3, 3);
+      ctx.fillRect(cx + 4, cy - 14, 3, 3);
+    } else {
+      ctx.fillRect(cx - 5, cy - 8, 2, 6);
+      ctx.fillRect(cx + 3, cy - 8, 2, 6);
+    }
+    // Ögon-prick
+    ctx.fillStyle = '#1a0808';
+    ctx.fillRect(cx - 2, cy - 13, 1, 1);
+    ctx.fillRect(cx + 1, cy - 13, 1, 1);
+  }
+
+  // Mörk krokodil i end-intro-stil (svart-grön silhuett) för pratbubblor
+  function drawTinyCroc(cx, cy, defeated) {
+    if (defeated) {
+      // På rygg, ben uppåt
+      ctx.fillStyle = '#0a1004';
+      ctx.fillRect(cx - 14, cy - 2, 28, 6);
+      // Vit underbuk syns
+      ctx.fillStyle = '#5a5a48';
+      ctx.fillRect(cx - 12, cy - 1, 24, 2);
+      // Ben uppåt-vajande
+      ctx.fillStyle = '#0a1004';
+      ctx.fillRect(cx - 10, cy - 7, 2, 5);
+      ctx.fillRect(cx + 8, cy - 7, 2, 5);
+      // X-öga
+      ctx.fillStyle = '#a01020';
+      ctx.font = 'bold 10px Georgia';
+      ctx.fillText('×', cx - 12, cy + 1);
+    } else {
+      // Stående mörk krokodil — samma silhuett som end-intro
+      // Kropp
+      ctx.fillStyle = '#0a1004';
+      ctx.fillRect(cx - 14, cy - 4, 28, 8);
+      // Ben i kort sprang-pose
+      ctx.fillRect(cx - 11, cy + 4, 3, 4);
+      ctx.fillRect(cx - 4, cy + 4, 3, 4);
+      ctx.fillRect(cx + 4, cy + 4, 3, 4);
+      ctx.fillRect(cx + 9, cy + 4, 3, 4);
+      // Svans (vajande)
+      ctx.fillRect(cx + 14, cy - 2, 8, 4);
+      // Huvud + öppen mun
+      ctx.fillStyle = '#1a2410';
+      ctx.fillRect(cx - 24, cy - 4, 12, 6);  // över-käft
+      ctx.fillRect(cx - 24, cy + 2, 10, 3);  // under-käft
+      // Röd mun
+      ctx.fillStyle = '#a01020';
+      ctx.fillRect(cx - 22, cy, 7, 2);
+      // Vita vassa tänder
+      ctx.fillStyle = '#f0e8d0';
+      for (let i = 0; i < 5; i++) {
+        ctx.fillRect(cx - 22 + i*3, cy - 1, 1, 2);
+        ctx.fillRect(cx - 22 + i*3, cy + 1, 1, 1.5);
+      }
+      // Gult illvilligt öga
+      ctx.fillStyle = '#ffe040';
+      ctx.fillRect(cx - 18, cy - 3, 1.5, 1.5);
+      ctx.fillStyle = '#1a0808';
+      ctx.fillRect(cx - 17.5, cy - 2.5, 1, 1);
+    }
+  }
+
+  // Generisk pratbubbla — smooth zoom-in vit cloud med BARA yttre kontur
+  // speakerX/speakerY = position of speaker så tail-bubblorna pekar dit
+  function drawPanelBubble(centerX, centerY, speakerX, speakerY, drawContent) {
+    // Smooth zoom-in baserat på dialogTimer (kan vara 0 om inte i dialog)
+    const lt = levelTransition;
+    let zoomT = 1;
+    if (lt.active && lt.phase === 'dialog') {
+      const ZOOM_FRAMES = 32;  // ~0.5s
+      zoomT = Math.min(1, lt.dialogTimer / ZOOM_FRAMES);
+      // Ease-out för naturlig pop-in
+      zoomT = 1 - Math.pow(1 - zoomT, 2.5);
+    }
+    // Mörk vignette runt bubblan så fokus blir tydligt (synkad med zoom)
+    ctx.fillStyle = `rgba(20,10,4,${0.55 * zoomT})`;
+    ctx.fillRect(0, 0, W, H);
+
+    ctx.save();
+    ctx.translate(centerX, centerY);
+    // STORA cirklar för en zoomad-in bubbla — alla skalas med zoomT
+    const Z = 0.15 + zoomT * 0.85;  // start på 15% storlek, expandera till 100%
+    const circles = [
+      { x: -160 * Z, y:   0 * Z, r: 75 * Z },
+      { x:  -80 * Z, y: -56 * Z, r: 70 * Z },
+      { x:   10 * Z, y: -68 * Z, r: 76 * Z },
+      { x:  100 * Z, y: -36 * Z, r: 72 * Z },
+      { x:  160 * Z, y:  20 * Z, r: 68 * Z },
+      { x:   90 * Z, y:  74 * Z, r: 66 * Z },
+      { x:    0 * Z, y:  82 * Z, r: 66 * Z },
+      { x:  -80 * Z, y:  62 * Z, r: 68 * Z },
+      { x: -160 * Z, y:  36 * Z, r: 66 * Z },
+    ];
+    // Steg 1: rita DARK overstor version (för outline) - 2 px större radie
+    ctx.fillStyle = '#3a2010';
+    ctx.beginPath();
+    for (const c of circles) {
+      ctx.moveTo(c.x + c.r + 2.5, c.y);
+      ctx.arc(c.x, c.y, c.r + 2.5, 0, Math.PI*2);
+    }
+    ctx.fill();
+    // Steg 2: rita VIT original-storlek över — bara den yttre 2.5 px-kanten av mörkret syns
+    ctx.fillStyle = '#ffffff';
+    ctx.beginPath();
+    for (const c of circles) {
+      ctx.moveTo(c.x + c.r, c.y);
+      ctx.arc(c.x, c.y, c.r, 0, Math.PI*2);
+    }
+    ctx.fill();
+
+    // Tail-bubblor mot talare — peka mot speakerX/speakerY i världs-koordinater
+    // Vinkeln mellan bubble-centrum (centerX,centerY) och talare (speakerX,speakerY)
+    const tdx = speakerX - centerX;
+    const tdy = speakerY - centerY;
+    const tDist = Math.hypot(tdx, tdy) || 1;
+    const tNx = tdx / tDist, tNy = tdy / tDist;
+    // Tre tail-cirklar längs riktningen, börjar utanför bubblan
+    const tails = [
+      { x: tNx * 170 * Z, y: tNy * 170 * Z + 30 * Z, r: 22 * Z },
+      { x: tNx * 220 * Z, y: tNy * 220 * Z + 40 * Z, r: 12 * Z },
+      { x: tNx * 255 * Z, y: tNy * 255 * Z + 48 * Z, r:  7 * Z },
+    ];
+    // Dark layer
+    ctx.fillStyle = '#3a2010';
+    for (const t of tails) {
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, t.r + 2.5, 0, Math.PI*2);
+      ctx.fill();
+    }
+    // White layer
+    ctx.fillStyle = '#ffffff';
+    for (const t of tails) {
+      ctx.beginPath();
+      ctx.arc(t.x, t.y, t.r, 0, Math.PI*2);
+      ctx.fill();
+    }
+
+    // Innehåll — skala med bubble-zoomen så det fadar in smooth
+    ctx.save();
+    ctx.scale(2.2 * Z, 2.2 * Z);
+    // Fade in content efter bubblan landat (sista 30% av zoomT)
+    ctx.globalAlpha = Math.max(0, (zoomT - 0.5) / 0.5);
+    drawContent();
+    ctx.restore();
+
+    ctx.restore();
+  }
+
+  function drawUpgradeChoice(lt) {
+    // Mörk overlay
+    ctx.fillStyle = 'rgba(20,8,4,0.6)';
+    ctx.fillRect(0, 0, W, H);
+    // Titel
+    ctx.fillStyle = '#ffe080';
+    ctx.font = 'bold 22px Georgia';
+    ctx.textAlign = 'center';
+    ctx.strokeStyle = '#3a2010';
+    ctx.lineWidth = 4;
+    ctx.strokeText('𓊪 𓏏 𓀀 ?', W/2, 110);
+    ctx.fillText('𓊪 𓏏 𓀀 ?', W/2, 110);
+    ctx.fillStyle = 'rgba(248,216,112,0.75)';
+    ctx.font = '12px Georgia';
+    ctx.fillText('CHOOSE YOUR HELP', W/2, 132);
+
+    // Två kort sida vid sida
+    const cardW = 260, cardH = 280;
+    const gap = 30;
+    const totalW = cardW * 2 + gap;
+    const startX = (W - totalW) / 2;
+    const cardY = 170;
+    drawUpgradeCard(startX, cardY, cardW, cardH, 'strong-slave', lt);
+    drawUpgradeCard(startX + cardW + gap, cardY, cardW, cardH, 'whip-helper', lt);
+  }
+
+  function drawUpgradeCard(x, y, w, h, type, lt) {
+    const hover = lt.hoverChoice === type;
+    // Kort-bakgrund
+    ctx.fillStyle = hover ? '#f8e8c0' : '#e0c890';
+    ctx.fillRect(x, y, w, h);
+    ctx.strokeStyle = hover ? '#a07020' : '#5a3818';
+    ctx.lineWidth = hover ? 4 : 3;
+    ctx.strokeRect(x, y, w, h);
+    // Inre kant
+    ctx.strokeStyle = '#7a5028';
+    ctx.lineWidth = 1;
+    ctx.strokeRect(x + 6, y + 6, w - 12, h - 12);
+
+    // Titel + ikon
+    ctx.textAlign = 'center';
+    ctx.fillStyle = '#3a2010';
+    ctx.font = 'bold 18px Georgia';
+    const cx = x + w/2;
+    if (type === 'strong-slave') {
+      // Stor figur — fet "starkur slav"
+      ctx.font = 'bold 64px "Noto Sans Egyptian Hieroglyphs",Georgia';
+      ctx.fillText('𓀜', cx, y + 100);
+      ctx.font = 'bold 18px Georgia';
+      ctx.fillText('STRONG SLAVE', cx, y + 130);
+      ctx.font = '13px Georgia';
+      ctx.fillStyle = '#5a3818';
+      ctx.fillText('𓊪  Carries 2× faster', cx, y + 165);
+      ctx.fillText('𓀀  Tireless worker', cx, y + 188);
+      ctx.fillText('𓋹  2× health', cx, y + 211);
+      ctx.fillText('𓎼  +1 special unit', cx, y + 234);
+    } else {
+      // Pisk-medhjälpare — tjock i vattnet med pisk
+      ctx.font = 'bold 64px "Noto Sans Egyptian Hieroglyphs",Georgia';
+      ctx.fillText('𓁀', cx, y + 100);
+      ctx.font = 'bold 18px Georgia';
+      ctx.fillText('WHIP-HELPER', cx, y + 130);
+      ctx.font = '13px Georgia';
+      ctx.fillStyle = '#5a3818';
+      ctx.fillText('𓈗  Sits in waterhole', cx, y + 165);
+      ctx.fillText('𓄿  Sometimes sleeps', cx, y + 188);
+      ctx.fillText('𓎟  Whips slackers', cx, y + 211);
+      ctx.fillText('𓂀  Keeps area clear', cx, y + 234);
+    }
+
+    // Hover-glow
+    if (hover) {
+      ctx.fillStyle = 'rgba(255,224,128,0.15)';
+      ctx.fillRect(x, y, w, h);
+    }
+  }
+
+  function drawMeetingBubble_LEGACY(lt) {
+    // Mörka resten av scenen för fokus
+    ctx.fillStyle = `rgba(20,10,5,${0.55 * lt.zoom})`;
+    ctx.fillRect(0, 0, W, H);
+
+    // Tankebubble bakom faraon — molnig form
+    const bx = pharaoh.x + 80;
+    const by = pharaoh.y - 150;
+    const scale = 1 + lt.zoom * 0.4;
+
+    ctx.save();
+    ctx.translate(bx, by);
+    ctx.scale(scale, scale);
+
+    // Bubble-bakgrund — REN VIT
+    ctx.fillStyle = `rgba(255,255,255,${0.97 * lt.zoom})`;
+    ctx.strokeStyle = `rgba(40,20,8,${lt.zoom})`;
+    ctx.lineWidth = 3;
+    // Molnig form via cirklar
+    ctx.beginPath();
+    ctx.arc(-50, 0, 34, 0, Math.PI*2);
+    ctx.arc(-18, -26, 32, 0, Math.PI*2);
+    ctx.arc(22, -22, 34, 0, Math.PI*2);
+    ctx.arc(50, 6, 32, 0, Math.PI*2);
+    ctx.arc(15, 30, 32, 0, Math.PI*2);
+    ctx.arc(-30, 26, 30, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+
+    // Små bubblor som leder ner till faraon (tankebubbla-stil)
+    ctx.beginPath();
+    ctx.arc(-55, 58, 9, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+    ctx.beginPath();
+    ctx.arc(-65, 75, 5, 0, Math.PI*2);
+    ctx.fill();
+    ctx.stroke();
+
+    // INNEHÅLL — 3 stadier:
+    //   0 = nuvarande pyramid (3s)
+    //   1 = fade-out (1s)
+    //   2 = bana 2 pyramid (DUBBELT så stor) — med gammal pyramid bredvid som jämförelse
+    // 3 stadier: visa nuvarande pyramid → fade → drömma om den färdiga nya
+    const groundY = 38;
+    if (lt.bubbleStage === 0) {
+      // Nuvarande pyramid (vad faraon byggt hittills)
+      const fadeIn = Math.min(1, lt.bubbleTimer / 24);
+      ctx.globalAlpha = fadeIn;
+      drawBubblePyramid(0, groundY, 1.6, null);
+      ctx.globalAlpha = 1;
+    } else if (lt.bubbleStage === 1) {
+      // Fade out
+      const t = Math.min(1, lt.bubbleTimer / 60);
+      ctx.globalAlpha = 1 - t;
+      drawBubblePyramid(0, groundY, 1.6, null);
+      ctx.globalAlpha = 1;
+    } else {
+      // Faraon föreställer sig den FÄRDIGA nya pyramiden — mycket större
+      const fadeIn = Math.min(1, lt.bubbleTimer / 30);
+      ctx.globalAlpha = fadeIn;
+      drawBubblePyramid(0, groundY, 3.0, null);
+      // Subtil glans/aura som signalerar "vision"
+      ctx.globalAlpha = fadeIn * 0.5;
+      ctx.fillStyle = '#ffe070';
+      for (let i = 0; i < 3; i++) {
+        const r = 4 + i * 6;
+        ctx.beginPath();
+        ctx.arc(0, groundY - 38, r, 0, Math.PI*2);
+        ctx.fill();
+      }
+      ctx.globalAlpha = 1;
+    }
+
+    ctx.restore();
+  }
+
+  function drawBubblePyramidSilhouette(ox, oy, sizeMul) {
+    const rows = 5;
+    const blockW = 6 * sizeMul;
+    const blockH = 4 * sizeMul;
+    ctx.fillStyle = '#a0a0a0';
+    ctx.save();
+    ctx.translate(ox, oy);
+    ctx.beginPath();
+    ctx.moveTo(-rows * blockW/2, 0);
+    ctx.lineTo(0, -rows * blockH);
+    ctx.lineTo(rows * blockW/2, 0);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+
+  function drawBubblePyramid(ox, oy, sizeMul, badge) {
+    const rows = 5;
+    const blockW = 6 * sizeMul;
+    const blockH = 4 * sizeMul;
+    const baseX = ox;
+    const baseY = oy + rows * blockH / 2;
+    ctx.save();
+    ctx.translate(baseX, baseY);
+    for (let r = 0; r < rows; r++) {
+      const cols = rows - r;
+      for (let c = 0; c < cols; c++) {
+        const px = (c - cols/2 + 0.5) * blockW;
+        const py = -r * blockH;
+        ctx.fillStyle = '#d4a070';
+        ctx.fillRect(px - blockW/2, py - blockH/2, blockW - 0.5, blockH - 0.5);
+        ctx.fillStyle = '#a07030';
+        ctx.fillRect(px + blockW/2 - 1, py - blockH/2, 0.5, blockH - 0.5);
+      }
+    }
+    // Badge i hörnet
+    if (badge) {
+      ctx.fillStyle = '#a83020';
+      ctx.font = 'bold 12px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillText(badge, rows * blockW / 2 + 6, -rows * blockH);
+    }
+    ctx.restore();
+  }
 
   function startEndIntro(opts) {
     if (endIntro.active) return;
@@ -948,6 +2623,14 @@
     state.running = false;
     showWin();
   }
+  // Anropas när 'flee'-beaten precis avslutats — starta level 2-transition direkt
+  function endEndIntroToLevel2() {
+    endIntro.active = false;
+    document.body.classList.remove('intro');
+    skipHintEl.classList.add('hidden');
+    state.running = true;
+    startLevelTransition({ fromEndIntro: true });
+  }
 
   function skipEndIntro() {
     if (!endIntro.active) return;
@@ -968,7 +2651,10 @@
     if (endIntro.beatTimer >= b.duration) {
       endIntro.beat++;
       endIntro.beatTimer = 0;
-      if (endIntro.beat >= END_BEATS.length) endEndIntro();
+      if (endIntro.beat >= END_BEATS.length) {
+        // Klart — pharao har flytt, dags att börja bana 2
+        endEndIntroToLevel2();
+      }
     }
   }
 
@@ -1017,6 +2703,7 @@
     if (name === 'crack')   return { scale: 1.12, offX: 0, offY: 0 };
     if (name === 'title')   return { scale: 1.12, offX: 0, offY: 0 };
     if (name === 'finale')  return { scale: 1.12, offX: 0, offY: 0 };
+    if (name === 'flee')    return { scale: 1.0, offX: 0, offY: 0 };
     return { scale: 1, offX: 0, offY: 0 };
   }
 
@@ -2029,6 +3716,509 @@
       ctx.fillStyle = `rgba(0,0,0,${easeInQuad(t)})`;
       ctx.fillRect(0, 0, W, H);
     }
+
+    // Flee: ANIME-STYLE massaker + escape (4 substadier)
+    if (name === 'flee') {
+      drawFleeMassacre(t);
+    }
+  }
+
+  // === FLEE-SEKVENS ===
+  // 4 substadier:
+  // A) 0-25%: Pharao mitt i krokodil-anstormning, slow-mo zoom-in på första whip-kill
+  // B) 25-55%: Brutal massaker — pharao slaktar krokodil efter krokodil i action-cuts
+  // C) 55-80%: Stå bland 10 lik, panorering över carnage, sen vänder och börjar springa
+  // D) 80-100%: Springer höger med blodig piska, dust, ut ur skärmen
+  function drawFleeMassacre(t) {
+    // Tema-bakgrund (samma mörka end-intro-tema)
+    ctx.fillStyle = '#080404';
+    ctx.fillRect(0, 0, W, H);
+    // Dyne-silhuetter med blod-stänk på marken
+    ctx.fillStyle = '#1a0e08';
+    ctx.beginPath();
+    ctx.moveTo(0, H * 0.84);
+    ctx.quadraticCurveTo(W * 0.3, H * 0.74, W * 0.6, H * 0.82);
+    ctx.quadraticCurveTo(W * 0.85, H * 0.79, W, H * 0.83);
+    ctx.lineTo(W, H);
+    ctx.lineTo(0, H);
+    ctx.closePath();
+    ctx.fill();
+    // Stjärnor
+    ctx.fillStyle = 'rgba(220,200,140,0.5)';
+    for (let i = 0; i < 50; i++) {
+      const sx = ((i * 73) % W);
+      const sy = ((i * 41) % (H * 0.6));
+      const tw = (Math.sin(state.time * 0.05 + i) + 1) * 0.4 + 0.2;
+      ctx.fillRect(sx, sy, 1.2, 1.2 * tw);
+    }
+    // Måne (kall blå-vit, dramatisk)
+    ctx.fillStyle = '#e8eef8';
+    ctx.beginPath();
+    ctx.arc(W * 0.85, H * 0.18, 36, 0, Math.PI*2);
+    ctx.fill();
+    ctx.fillStyle = '#080404';
+    ctx.beginPath();
+    ctx.arc(W * 0.85 + 10, H * 0.18 - 4, 32, 0, Math.PI*2);
+    ctx.fill();
+
+    if (t < 0.25) {
+      drawFleeStageA(t / 0.25);
+    } else if (t < 0.55) {
+      drawFleeStageB((t - 0.25) / 0.30);
+    } else if (t < 0.80) {
+      drawFleeStageC((t - 0.55) / 0.25);
+    } else {
+      drawFleeStageD((t - 0.80) / 0.20);
+    }
+
+    // Slut-fade
+    if (t > 0.93) {
+      const fadeT = (t - 0.93) / 0.07;
+      ctx.fillStyle = `rgba(0,0,0,${fadeT})`;
+      ctx.fillRect(0, 0, W, H);
+    }
+  }
+
+  // STAGE A: Krokodiler stormar in från vänster, pharao står still mitt på skärmen
+  // Zoom-in efter halva på första kill med slow-mo
+  function drawFleeStageA(p) {
+    const PYR_BASE_Y = H * 0.84;
+    const PH_X = W * 0.55, PH_Y = PYR_BASE_Y;
+    // Krokodiler i hög-fart från vänster (3 st i denna stage)
+    for (let i = 0; i < 3; i++) {
+      const cx = -30 + p * (W * 0.5) + i * 90;
+      const cy = PYR_BASE_Y - 4 + i * 6;
+      if (cx > -30 && cx < W) drawAnimeCroc(cx, cy, state.time + i * 23, false);
+    }
+    // Pharao — dramatisk pose med piska redo
+    const pose = animeFleePose('readyA', p, state.time);
+    drawCinematicPharaoh(PH_X, PH_Y, 1.4, pose, 1.0);
+    // Zoom-in (vinjettering) andra halvan av stage A
+    if (p > 0.5) {
+      const zoom = (p - 0.5) / 0.5;
+      ctx.fillStyle = `rgba(0,0,0,${zoom * 0.5})`;
+      // Top + bottom bands (anime cinematic widescreen bars)
+      const barH = 70 * zoom;
+      ctx.fillStyle = `rgba(0,0,0,${0.85 * zoom})`;
+      ctx.fillRect(0, 0, W, barH);
+      ctx.fillRect(0, H - barH, W, barH);
+      // Speed-lines från vänster
+      ctx.strokeStyle = `rgba(255,240,200,${0.3 * zoom})`;
+      ctx.lineWidth = 1.5;
+      for (let i = 0; i < 14; i++) {
+        const ly = ((i * 53) % H);
+        ctx.beginPath();
+        ctx.moveTo(0, ly);
+        ctx.lineTo(80 + (i % 4) * 20, ly);
+        ctx.stroke();
+      }
+    }
+    // Text-overlay
+    if (p < 0.6) {
+      ctx.fillStyle = `rgba(255,220,120,${0.85 * (1 - p / 0.6)})`;
+      ctx.font = 'bold 36px "Noto Sans Egyptian Hieroglyphs", Georgia';
+      ctx.textAlign = 'center';
+      ctx.strokeStyle = 'rgba(20,8,4,0.9)';
+      ctx.lineWidth = 5;
+      ctx.strokeText('𓆊 𓆊 𓆊', W/2, 90);
+      ctx.fillText('𓆊 𓆊 𓆊', W/2, 90);
+    }
+  }
+
+  // STAGE B: Brutal massaker — pharao slaktar krokodiler med snabba klipp
+  // Räknar antal döda krokodiler (mål: 10)
+  function drawFleeStageB(p) {
+    const PYR_BASE_Y = H * 0.84;
+    const PH_X = W * 0.5, PH_Y = PYR_BASE_Y;
+    // Räkna ut hur många döda baserat på p (0→10)
+    const kills = Math.floor(p * 10);
+    // Camera-shake för impact
+    const shake = Math.sin(state.time * 0.7) * (1 - p) * 4 +
+                  Math.sin(state.time * 1.3) * 2;
+    ctx.save();
+    ctx.translate(shake, 0);
+
+    // Anime widescreen bars (full storlek under hela stage B)
+    ctx.fillStyle = 'rgba(0,0,0,0.95)';
+    ctx.fillRect(0, 0, W, 70);
+    ctx.fillRect(0, H - 70, W, 70);
+
+    // Döda krokodiler på marken (utspridda kring pharao)
+    for (let i = 0; i < kills; i++) {
+      const offX = ((i * 73 + 17) % 480) - 240;
+      const offY = ((i * 41) % 80) - 40;
+      const ang = ((i * 31) % 90) * Math.PI / 180;
+      ctx.save();
+      ctx.translate(PH_X + offX, PH_Y + offY * 0.5 + 16);
+      ctx.rotate(ang);
+      drawAnimeCroc(0, 0, state.time, true);
+      ctx.restore();
+    }
+
+    // Levande krokodiler som fortfarande chargear (färre eftersom de dör)
+    const livingCount = Math.max(1, 4 - Math.floor(kills * 0.5));
+    for (let i = 0; i < livingCount; i++) {
+      const cx = -50 + (state.time * 4 + i * 110) % (W + 100);
+      const cy = PYR_BASE_Y - 4 + i * 4;
+      drawAnimeCroc(cx, cy, state.time + i * 23, false);
+    }
+
+    // Pharao i intensiv whip-pose
+    const pose = animeFleePose('massacre', p, state.time);
+    drawCinematicPharaoh(PH_X, PH_Y, 1.3, pose, 1.0);
+
+    // Whip-impact flash då och då
+    if ((state.time % 12) < 3) {
+      ctx.fillStyle = 'rgba(255,250,200,0.5)';
+      ctx.fillRect(0, 0, W, H);
+      // Speed-lines konvergerande mot pharao
+      ctx.strokeStyle = 'rgba(255,240,180,0.6)';
+      ctx.lineWidth = 2;
+      for (let i = 0; i < 16; i++) {
+        const ang = (i / 16) * Math.PI * 2;
+        const x1 = PH_X + Math.cos(ang) * 80;
+        const y1 = PH_Y + Math.sin(ang) * 80 - 80;
+        const x2 = PH_X + Math.cos(ang) * 250;
+        const y2 = PH_Y + Math.sin(ang) * 250 - 80;
+        ctx.beginPath();
+        ctx.moveTo(x1, y1);
+        ctx.lineTo(x2, y2);
+        ctx.stroke();
+      }
+    }
+
+    // Blod-spray (många små)
+    for (let i = 0; i < 20; i++) {
+      const a = (state.time * 0.1 + i) % Math.PI * 2;
+      const r = 30 + (state.time + i * 7) % 80;
+      const bx = PH_X + Math.cos(a) * r;
+      const by = PH_Y + Math.sin(a) * r - 60;
+      ctx.fillStyle = `rgba(140,16,16,${0.5 + Math.sin(i) * 0.3})`;
+      ctx.fillRect(bx, by, 3, 3);
+    }
+
+    ctx.restore();
+
+    // Kill-counter (anime-style)
+    ctx.fillStyle = '#fff088';
+    ctx.font = 'bold 48px Georgia';
+    ctx.textAlign = 'right';
+    ctx.strokeStyle = 'rgba(20,8,4,0.9)';
+    ctx.lineWidth = 6;
+    const kt = `× ${kills}`;
+    ctx.strokeText(kt, W - 40, 110);
+    ctx.fillText(kt, W - 40, 110);
+    // Krokodil-glyf som "räknas"
+    ctx.font = 'bold 32px "Noto Sans Egyptian Hieroglyphs", Georgia';
+    ctx.fillStyle = '#1a2410';
+    ctx.fillText('𓆊', W - 110, 105);
+  }
+
+  // STAGE C: Stå bland liken, panorering — sen vänder pharao och börjar springa
+  function drawFleeStageC(p) {
+    const PYR_BASE_Y = H * 0.84;
+    const PH_X = W * 0.5, PH_Y = PYR_BASE_Y;
+    // 10 döda krokodiler runt
+    for (let i = 0; i < 10; i++) {
+      const offX = ((i * 73 + 17) % 480) - 240;
+      const offY = ((i * 41) % 80) - 40;
+      const ang = ((i * 31) % 90) * Math.PI / 180;
+      ctx.save();
+      ctx.translate(PH_X + offX, PH_Y + offY * 0.5 + 16);
+      ctx.rotate(ang);
+      drawAnimeCroc(0, 0, state.time, true);
+      ctx.restore();
+    }
+    // Pharao står triumphant först (0-0.6), sen vänder (0.6-1)
+    if (p < 0.6) {
+      const pose = animeFleePose('triumph', p / 0.6, state.time);
+      drawCinematicPharaoh(PH_X, PH_Y, 1.4, pose, 1.0);
+      // Vinjette (rödaktig — blod-mood)
+      const grad = ctx.createRadialGradient(W/2, H/2, 100, W/2, H/2, W * 0.7);
+      grad.addColorStop(0, 'rgba(0,0,0,0)');
+      grad.addColorStop(1, 'rgba(80,8,4,0.55)');
+      ctx.fillStyle = grad;
+      ctx.fillRect(0, 0, W, H);
+    } else {
+      // Vänder + börjar springa
+      const lp = (p - 0.6) / 0.4;
+      const offX = lp * 60;  // glider lite åt höger
+      const pose = animeFleePose('turn', lp, state.time);
+      drawCinematicPharaoh(PH_X + offX, PH_Y, 1.4 - lp * 0.2, pose, 1.0);
+      // Damm börjar bakom honom
+      for (let i = 0; i < 4; i++) {
+        ctx.fillStyle = `rgba(160,130,80,${0.5 * lp})`;
+        ctx.fillRect(PH_X - i * 14, PH_Y + 14, 4, 2);
+      }
+    }
+    // Text
+    if (p < 0.4) {
+      ctx.fillStyle = `rgba(255,240,180,${0.85 * (1 - p / 0.4)})`;
+      ctx.font = 'bold 32px "Noto Sans Egyptian Hieroglyphs", Georgia';
+      ctx.textAlign = 'center';
+      ctx.strokeStyle = 'rgba(20,8,4,0.9)';
+      ctx.lineWidth = 5;
+      ctx.strokeText('𓀀 ✓ 𓆊 ×𓎉', W/2, 100);
+      ctx.fillText('𓀀 ✓ 𓆊 ×𓎉', W/2, 100);
+    }
+  }
+
+  // STAGE D: Pharao springer höger ut ur skärmen
+  function drawFleeStageD(p) {
+    const PYR_BASE_Y = H * 0.84;
+    const PH_Y = PYR_BASE_Y;
+    const startX = W * 0.55, endX = W * 1.15;
+    const phX = startX + (endX - startX) * easeInQuad(p);
+
+    // Döda krokodiler kvar bakom (visa några)
+    for (let i = 0; i < 8; i++) {
+      const offX = ((i * 73 + 17) % 360) - 180;
+      const offY = ((i * 41) % 80) - 40;
+      const cx = startX + offX;
+      if (cx < phX - 60) {
+        const ang = ((i * 31) % 90) * Math.PI / 180;
+        ctx.save();
+        ctx.translate(cx, PH_Y + offY * 0.5 + 16);
+        ctx.rotate(ang);
+        drawAnimeCroc(0, 0, state.time, true);
+        ctx.restore();
+      }
+    }
+
+    // Pharao springande med piska bakåt
+    const pose = animeFleePose('flee', p, state.time);
+    drawCinematicPharaoh(phX, PH_Y, 1.3, pose, 1.0);
+
+    // Damm bakom
+    for (let i = 0; i < 8; i++) {
+      ctx.fillStyle = `rgba(160,130,80,${0.5 - i * 0.05})`;
+      ctx.fillRect(phX - 14 - i * 16, PH_Y + 14 + (i % 2) * 2, 5, 2);
+    }
+
+    // Sand-streck
+    ctx.strokeStyle = 'rgba(220,180,120,0.4)';
+    ctx.lineWidth = 1;
+    for (let i = 0; i < 5; i++) {
+      const ly = PH_Y - 30 + i * 12;
+      ctx.beginPath();
+      ctx.moveTo(phX - 80, ly);
+      ctx.lineTo(phX - 30, ly);
+      ctx.stroke();
+    }
+  }
+
+  // Anime-stil pose för pharao baserat på sub-stage
+  function animeFleePose(mode, p, time) {
+    const baseBob = Math.sin(time * 0.2) * 2;
+    if (mode === 'readyA') {
+      return {
+        whip: 0.7 + Math.sin(time * 0.3) * 0.2,
+        frontArm: 0.4,
+        bob: baseBob,
+        head: 0.1,
+        whipSwing: Math.sin(time * 0.4) * 0.3,
+      };
+    }
+    if (mode === 'massacre') {
+      return {
+        whip: 0.85 + Math.sin(time * 0.7) * 0.15,
+        frontArm: 0.6 + Math.sin(time * 0.5) * 0.3,
+        bob: baseBob + Math.sin(time * 0.6) * 3,
+        head: 0.2,
+        whipSwing: Math.sin(time * 0.9) * 0.8,
+      };
+    }
+    if (mode === 'triumph') {
+      return {
+        whip: 0.95,
+        frontArm: 0.95,
+        bob: baseBob,
+        head: 0.3,
+        whipSwing: Math.sin(time * 0.2) * 0.2,
+      };
+    }
+    if (mode === 'turn') {
+      return {
+        whip: 0.6,
+        frontArm: 0.3 + p * 0.4,
+        bob: baseBob * (1 + p * 2),
+        head: 0.15,
+        whipSwing: -0.3,
+      };
+    }
+    // 'flee'
+    return {
+      whip: 0.5,
+      frontArm: 0.7 + Math.sin(time * 0.5) * 0.2,
+      bob: Math.sin(time * 0.5) * 4,
+      head: -0.1,
+      whipSwing: -0.5 + Math.sin(time * 0.4) * 0.3,
+    };
+  }
+
+  // Krokodil i end-intro-stil (använder vår SILH/EDGE)
+  function drawAnimeCroc(x, y, time, dead) {
+    const SILH = '#0a0408';
+    const EDGE = '#ffd880';
+    if (dead) {
+      // Ligger på sidan med ben uppåt + blodpöl
+      ctx.fillStyle = 'rgba(120,10,10,0.5)';
+      ctx.beginPath();
+      ctx.ellipse(x, y + 6, 36, 5, 0, 0, Math.PI*2);
+      ctx.fill();
+      // Kropp
+      ctx.fillStyle = SILH;
+      ctx.beginPath();
+      ctx.moveTo(x - 40, y - 1);
+      ctx.lineTo(x - 60, y);
+      ctx.lineTo(x - 40, y + 2);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x - 40, y - 1);
+      ctx.quadraticCurveTo(x - 30, y - 8, x - 15, y - 8);
+      ctx.lineTo(x + 14, y - 8);
+      ctx.lineTo(x + 24, y - 6);
+      ctx.lineTo(x + 24, y + 2);
+      ctx.lineTo(x - 40, y + 2);
+      ctx.closePath();
+      ctx.fill();
+      // Underbuk vit
+      ctx.fillStyle = '#5a5048';
+      ctx.fillRect(x - 30, y + 1, 50, 2);
+      // Ben uppåt (stelt)
+      ctx.fillStyle = SILH;
+      ctx.fillRect(x - 22, y - 10, 3, 4);
+      ctx.fillRect(x - 8, y - 10, 3, 4);
+      ctx.fillRect(x + 6, y - 10, 3, 4);
+      ctx.fillRect(x + 18, y - 10, 3, 4);
+      // X-öga
+      ctx.strokeStyle = '#a01020';
+      ctx.lineWidth = 1.5;
+      ctx.beginPath();
+      ctx.moveTo(x + 6, y - 5);
+      ctx.lineTo(x + 12, y - 1);
+      ctx.moveTo(x + 12, y - 5);
+      ctx.lineTo(x + 6, y - 1);
+      ctx.stroke();
+    } else {
+      // Charge-läge — body längs marken
+      const jaw = Math.max(0, Math.sin(time * 0.35) * 6);
+      ctx.fillStyle = SILH;
+      // Svans
+      ctx.beginPath();
+      ctx.moveTo(x - 40, y - 1);
+      ctx.lineTo(x - 60 - Math.sin(time * 0.2) * 4, y);
+      ctx.lineTo(x - 40, y + 2);
+      ctx.closePath();
+      ctx.fill();
+      // Kropp
+      ctx.beginPath();
+      ctx.moveTo(x - 40, y - 1);
+      ctx.quadraticCurveTo(x - 30, y - 8, x - 15, y - 8);
+      ctx.lineTo(x + 14, y - 8);
+      ctx.lineTo(x + 24, y - 6);
+      ctx.lineTo(x + 24, y + 2);
+      ctx.lineTo(x - 40, y + 2);
+      ctx.closePath();
+      ctx.fill();
+      // Ben
+      ctx.fillRect(x - 26, y + 2, 3, 4);
+      ctx.fillRect(x - 12, y + 2, 3, 4);
+      ctx.fillRect(x + 4, y + 2, 3, 4);
+      ctx.fillRect(x + 16, y + 2, 3, 4);
+      // Käkar
+      ctx.beginPath();
+      ctx.moveTo(x + 14, y - 8);
+      ctx.lineTo(x + 32, y - 6);
+      ctx.lineTo(x + 32, y - 4);
+      ctx.lineTo(x + 14, y - 4);
+      ctx.closePath();
+      ctx.fill();
+      ctx.beginPath();
+      ctx.moveTo(x + 14, y);
+      ctx.lineTo(x + 32, y + 2 + jaw);
+      ctx.lineTo(x + 32, y + 4 + jaw);
+      ctx.lineTo(x + 14, y + 4);
+      ctx.closePath();
+      ctx.fill();
+      // Tänder (vita)
+      ctx.fillStyle = '#f0e8d0';
+      for (let i = 0; i < 4; i++) {
+        ctx.fillRect(x + 16 + i * 3, y - 3, 1, 2);
+        ctx.fillRect(x + 16 + i * 3, y + 2 + jaw * 0.7, 1, 1.8);
+      }
+      // Glödande gult öga
+      ctx.fillStyle = EDGE;
+      ctx.fillRect(x + 4, y - 7, 2, 2);
+    }
+  }
+
+  // Springande farao i mörk silhuett
+  function drawFleeingPharaoh(x, y, t) {
+    const phase = state.time * 0.4;
+    const legSwing = Math.sin(phase) * 6;
+    const armSwing = Math.sin(phase + Math.PI) * 6;
+    // Mörk silhuett-stil (matchar end-intro mörker)
+    ctx.fillStyle = '#0e0604';
+    // Ben (i löpning)
+    ctx.fillRect(x - 6, y, 5, 16 + legSwing);
+    ctx.fillRect(x + 1, y, 5, 16 - legSwing);
+    // Kilt
+    ctx.fillStyle = '#1a0e08';
+    ctx.fillRect(x - 9, y - 6, 18, 8);
+    // Torso
+    ctx.fillStyle = '#0e0604';
+    ctx.fillRect(x - 8, y - 18, 16, 12);
+    // Armar (svingar)
+    ctx.fillRect(x - 12, y - 16 + armSwing, 4, 12);
+    ctx.fillRect(x + 8, y - 16 - armSwing, 4, 12);
+    // Huvud
+    ctx.fillRect(x - 7, y - 28, 14, 12);
+    // Nemes (gulrand i silhuett)
+    ctx.fillStyle = '#3a2810';
+    ctx.fillRect(x - 8, y - 32, 16, 6);
+    // Lite gul glimt på pannan så han skiljs från krokodilerna
+    ctx.fillStyle = '#a07020';
+    ctx.fillRect(x - 6, y - 28, 12, 2);
+    // Skräck-svett-droppar bakom
+    ctx.fillStyle = '#88aacc';
+    if (Math.sin(state.time * 0.5) > 0.5) {
+      ctx.fillRect(x - 14, y - 22, 2, 3);
+      ctx.fillRect(x - 18, y - 18, 2, 3);
+    }
+  }
+
+  // Springande krokodil i mörk silhuett som jagar
+  function drawFleeingCroc(x, y, time) {
+    const phase = time * 0.3;
+    const wob = Math.sin(phase) * 1.5;
+    // Mörk kropp
+    ctx.fillStyle = '#0a1004';
+    ctx.fillRect(x - 22, y - 4, 36, 8);
+    // Ben i löpning
+    const legSwing = Math.sin(phase) * 3;
+    ctx.fillRect(x - 16, y + 4, 3, 6 + legSwing);
+    ctx.fillRect(x - 6, y + 4, 3, 6 - legSwing);
+    ctx.fillRect(x + 4, y + 4, 3, 6 + legSwing);
+    ctx.fillRect(x + 12, y + 4, 3, 6 - legSwing);
+    // Svans (vajande)
+    ctx.fillRect(x + 14, y - 2 + wob, 12, 4);
+    // Huvud + öppen mun
+    ctx.fillStyle = '#1a2410';
+    ctx.fillRect(x - 34, y - 5, 14, 6);
+    ctx.fillRect(x - 34, y + 1, 12, 4);
+    // Röd mun-innanmäte
+    ctx.fillStyle = '#a01020';
+    ctx.fillRect(x - 32, y - 1, 8, 2);
+    // Vita tänder
+    ctx.fillStyle = '#f0e8d0';
+    for (let i = 0; i < 5; i++) {
+      ctx.fillRect(x - 32 + i * 3, y - 2, 1, 2);
+    }
+    // Gult glödande öga
+    ctx.fillStyle = '#ffe040';
+    ctx.fillRect(x - 28, y - 4, 1.5, 1.5);
   }
 
   // Stjärnor (statiska positioner)
@@ -2047,15 +4237,45 @@
 
   window.addEventListener('keydown', e => {
     keys[e.key.toLowerCase()] = true;
-    if (e.code === 'Space') { e.preventDefault(); tryWhip(); }
+    if (e.code === 'Space') {
+      e.preventDefault();
+      // Space används till dialog-advancering om dialogen är aktiv, annars pisk
+      if (advanceDialog()) return;
+      tryWhip();
+    }
   });
   window.addEventListener('keyup', e => { keys[e.key.toLowerCase()] = false; });
   canvas.addEventListener('mousemove', e => {
     const r = canvas.getBoundingClientRect();
     mouseX = (e.clientX - r.left) * (W / r.width);
     mouseY = (e.clientY - r.top) * (H / r.height);
+    // Hover-effekt på upgrade-kort
+    if (levelTransition.active && levelTransition.phase === 'upgrade-choice') {
+      levelTransition.hoverChoice = pickedUpgradeCard(mouseX, mouseY);
+    }
   });
-  canvas.addEventListener('mousedown', () => { tryWhip(); });
+  canvas.addEventListener('mousedown', (e) => {
+    // Klick på upgrade-kort tas FÖRE whip
+    if (levelTransition.active && levelTransition.phase === 'upgrade-choice') {
+      const picked = pickedUpgradeCard(mouseX, mouseY);
+      if (picked) {
+        levelTransition.upgradeChoice = picked;
+        return;
+      }
+    }
+    tryWhip();
+  });
+
+  function pickedUpgradeCard(mx, my) {
+    const cardW = 260, cardH = 280, gap = 30;
+    const totalW = cardW * 2 + gap;
+    const startX = (W - totalW) / 2;
+    const cardY = 170;
+    if (my < cardY || my > cardY + cardH) return null;
+    if (mx >= startX && mx <= startX + cardW) return 'strong-slave';
+    if (mx >= startX + cardW + gap && mx <= startX + cardW + gap + cardW) return 'whip-helper';
+    return null;
+  }
 
   // Click anywhere skips the end-intro
   window.addEventListener('click', () => {
@@ -2514,9 +4734,53 @@
   // ---------- Pyramid ----------
   const PYR_BASE_X = 900;
   const PYR_BASE_Y = 580;
-  const PYR_BLOCK_W = 28;
-  const PYR_BLOCK_H = 18;
+  // Block-storlek skala-baserat — bana 2 = 2x storlek (let så de kan ändras)
+  const PYR_BLOCK_W_BASE = 28;
+  const PYR_BLOCK_H_BASE = 18;
+  let PYR_BLOCK_W = PYR_BLOCK_W_BASE;
+  let PYR_BLOCK_H = PYR_BLOCK_H_BASE;
   const PYR_ROWS = 10;
+  function applyLevelScale() {
+    const scale = state.level === 2 ? 2 : 1;
+    PYR_BLOCK_W = PYR_BLOCK_W_BASE * scale;
+    PYR_BLOCK_H = PYR_BLOCK_H_BASE * scale;
+    applyLevelLayout();
+  }
+  // Bana 2: ny topografi — byter quarry och waterhole-platser, ev. waterhole-form
+  function applyLevelLayout() {
+    if (state.level === 2) {
+      // Quarry där bryggeriet brukade vara (uppe till vänster)
+      quarry.x = 60;
+      quarry.y = 430;
+      quarry.w = 180;
+      quarry.h = 105;
+      // Waterhole stannar uppe till höger fast lite annorlunda
+      WATERHOLE.cx = 1080;
+      WATERHOLE.cy = 685;
+      WATERHOLE.rx = 100;
+      WATERHOLE.ry = 34;
+    } else {
+      quarry.x = 120;
+      quarry.y = 540;
+      quarry.w = 200;
+      quarry.h = 115;
+      WATERHOLE.cx = 1080;
+      WATERHOLE.cy = 660;   // en aning nedanför pyramidens fot, lämnar utrymme för vagn-vägen under
+      WATERHOLE.rx = 130;
+      WATERHOLE.ry = 38;
+    }
+    // Uppdatera REST_ZONES waterhole-position så slavar går till rätt ställe
+    if (typeof REST_ZONES !== 'undefined') {
+      for (const z of REST_ZONES) {
+        if (z.atWaterhole) {
+          z.x = WATERHOLE.cx;
+          z.y = WATERHOLE.cy;
+        }
+      }
+    }
+    // Facklor får också byta layout
+    if (typeof applyTorchLayout === 'function') applyTorchLayout();
+  }
 
   function pyramidBlockPos(idx) {
     let n = idx;
@@ -2545,9 +4809,9 @@
   // ---------- Runt vattenhål i nedre-högra hörnet ----------
   const WATERHOLE = {
     cx: 1080,
-    cy: 685,
+    cy: 660,
     rx: 130,
-    ry: 40,
+    ry: 38,
   };
 
   // Skjut ut en punkt ur vattenytan (ellipsen) — radiellt åt närmaste kant.
@@ -2612,12 +4876,26 @@
 
   // ---------- Facklor (alltid synliga, men bara tända på natten) ----------
   // Slavar går dit och tänder dem vid skymning — bara några stycken försöker.
-  const TORCHES = [
-    { x: 470, y: 480, lit: false, assignedTo: null },
-    { x: 810, y: 480, lit: false, assignedTo: null },
-    { x: 280, y: 510, lit: false, assignedTo: null },
-    { x: 750, y: 540, lit: false, assignedTo: null },
+  const TORCHES_LEVEL1 = [
+    { x: 470, y: 480 },
+    { x: 810, y: 480 },
+    { x: 280, y: 510 },
+    { x: 750, y: 540 },
   ];
+  const TORCHES_LEVEL2 = [
+    // Alla utanför pyramiden (PYR_BASE_X=900, halv-bas ≈ 280 på bana 2)
+    { x: 320, y: 720 },   // nedre vänster
+    { x: 540, y: 740 },   // nedre mellan-vänster
+    { x: 1240, y: 720 },  // nedre höger (utanför pyramidens högerkant)
+    { x: 1180, y: 460 },  // upper höger
+    { x: 360, y: 500 },   // mellan vänster (nära quarry)
+  ];
+  const TORCHES = TORCHES_LEVEL1.map(p => ({ x: p.x, y: p.y, lit: false, assignedTo: null }));
+  function applyTorchLayout() {
+    const src = state.level === 2 ? TORCHES_LEVEL2 : TORCHES_LEVEL1;
+    TORCHES.length = 0;
+    for (const p of src) TORCHES.push({ x: p.x, y: p.y, lit: false, assignedTo: null });
+  }
 
   const REST_ZONES = [
     { x: 75,   y: 670, name: 'left',      facing: 1,  onSphinx: false, atWaterhole: false, atBrewery: false, seated: false },
@@ -2626,13 +4904,18 @@
     { x: 1080, y: 685, name: 'waterhole', facing: -1, onSphinx: false, atWaterhole: true,  atBrewery: false, seated: true  },
     { x: 120,  y: 468, name: 'brewery',   facing: -1, onSphinx: false, atWaterhole: false, atBrewery: true,  seated: true  },
   ];
+  // Vilka rest-zoner är tillgängliga på nuvarande bana?
+  function availableRestZones() {
+    if (state.level === 2) return REST_ZONES.filter(z => !z.onSphinx && !z.atBrewery);
+    return REST_ZONES;
+  }
   function pickRestZone() {
-    // Bryggeriet får ha max 2 samtidiga gäster — annars blir det rörigt
+    const all = availableRestZones();
     const brewCount = workers.filter(w =>
       w.state === 'lazy' && w.restZone && w.restZone.atBrewery).length;
     const pool = brewCount >= 2
-      ? REST_ZONES.filter(z => !z.atBrewery)
-      : REST_ZONES;
+      ? all.filter(z => !z.atBrewery)
+      : all;
     return pool[Math.floor(Math.random() * pool.length)];
   }
 
@@ -2661,16 +4944,17 @@
       action = alts[Math.floor(Math.random() * alts.length)];
     }
 
-    // Tilldela zon
+    // Tilldela zon (filtrerat efter bana — t.ex. ingen sphinx på bana 2)
+    const allowed = availableRestZones();
     if (action === 'drinking') {
-      w.restZone = REST_ZONES.find(z => z.atBrewery);
+      w.restZone = allowed.find(z => z.atBrewery);
     } else if (action === 'playing_animal') {
       // Djurleekare kan inte sitta på sphinx/waterhole/brewery
-      const ok = REST_ZONES.filter(z => !z.seated && !z.atBrewery);
+      const ok = allowed.filter(z => !z.seated && !z.atBrewery);
       w.restZone = ok[Math.floor(Math.random() * ok.length)];
     } else {
       // Övriga: alla utom bryggeriet (det är drinking-only)
-      const ok = REST_ZONES.filter(z => !z.atBrewery);
+      const ok = allowed.filter(z => !z.atBrewery);
       w.restZone = ok[Math.floor(Math.random() * ok.length)];
     }
     w.lazyAction = action;
@@ -2681,7 +4965,7 @@
     // Om brewery var fullt (returnerade null) — välj annan zon istället
     if (!w.restSpot && action === 'drinking') {
       w.lazyAction = 'sleeping';
-      const ok = REST_ZONES.filter(z => !z.atBrewery);
+      const ok = availableRestZones().filter(z => !z.atBrewery);
       w.restZone = ok[Math.floor(Math.random() * ok.length)];
       w.restSpot = pickRestSpot(w.restZone, w);
     }
@@ -3563,6 +5847,67 @@
           w.vx = 0;
           w.vy = 0;
         }
+      } else if (state.phase === 'demolishing' && state.blocksPlaced > 0 &&
+                 !w.bearerOf && !w.lintelTask && !w.crankTask && !w.torchTask) {
+        // ---- Demolitions-fas: ta sten från toppen av pyramiden, lämna i quarry ----
+        if (!w.carrying) {
+          if (w.pickupTimer > 0) {
+            w.pickupTimer--;
+            if (w.pickupTimer === 0) {
+              w.carrying = true;
+              w.target = null;
+              // Stenen "lossnar" från pyramiden — decrement direkt
+              state.blocksPlaced = Math.max(0, state.blocksPlaced - 1);
+              // Damm-puff
+              for (let i = 0; i < 10; i++) {
+                state.cracks.push({
+                  x: w.x + (Math.random()-0.5)*22,
+                  y: w.y + 2 + Math.random()*4,
+                  vx: (Math.random()-0.5)*2.2,
+                  vy: -Math.random()*1.6 - 0.5,
+                  life: 0.9,
+                  color: '#d4a070',
+                  grav: 0.12,
+                });
+              }
+            }
+          } else {
+            // Gå till TOPPEN av pyramiden
+            const topIdx = state.blocksPlaced - 1;
+            const pos = pyramidBlockPos(topIdx);
+            if (!pos) { w.target = null; continue; }
+            if (!w.target) {
+              w.target = { x: pos.x + (w.x < pos.x ? -16 : 16), y: pos.y + 8 };
+            }
+            moveWorkerToward(w, w.target.x, w.target.y);
+            if (dist2(w.x, w.y, w.target.x, w.target.y) < 14) {
+              w.pickupTimer = 36;
+            }
+          }
+        } else {
+          // Bär tillbaka till quarryn
+          if (!w.target) {
+            w.target = {
+              x: quarry.x + 30 + Math.random() * (quarry.w - 60),
+              y: quarry.y + quarry.h - 8 + Math.random()*6,
+            };
+          }
+          moveWorkerToward(w, w.target.x, w.target.y);
+          if (dist2(w.x, w.y, w.target.x, w.target.y) < 14) {
+            w.carrying = false;
+            w.target = null;
+            spawnFloater(w.x, w.y - 30, '𓊌→', '#a07030');
+            // Sista stenen — switch tillbaka till bygg-fas (för bana 2)
+            if (state.blocksPlaced === 0) {
+              state.phase = 'building';
+              state.blockSettleIdx = -1;
+              state.blockSettleTimer = 0;
+              // Bana 2: block-storlek dubblas så pyramiden blir 2x större
+              applyLevelScale();
+            }
+          }
+        }
+        continue;
       } else if (w.woodTask) {
         // ---- Trä-leverans-uppdrag (egen state machine) ----
         if (w.woodPhase === 'fetch') {
@@ -3627,25 +5972,58 @@
           } else {
             // Välj uppgift — lintel (2-pers), sten, eller trä
             if (!w.target) {
-              // Block 30 är lintel-stenen — kräver 2 workers
-              if (state.blocksPlaced === 30) {
-                const leaderExists = workers.some(o => o.lintelTask && o.lintelRole === 'leader');
-                const followerExists = workers.some(o => o.lintelTask && o.lintelRole === 'follower');
-                if (!leaderExists) {
+              // Multi-bär: bana 2 = ALLA stenar (4 pers), bana 1 = bara block 30 (2 pers)
+              const needsGang = state.phase === 'building' &&
+                                (state.level === 2 || state.blocksPlaced === 30);
+              if (needsGang) {
+                const gangSize = state.level === 2 ? 4 : 2;
+                // Hitta leader som behöver fler bärare
+                const leaderNeedingMore = workers.find(o => {
+                  if (!o.lintelTask || o.lintelRole !== 'leader') return false;
+                  const carriers = 1 + (o.lintelPartner ? 1 : 0) + (o.lintelHelpers ? o.lintelHelpers.length : 0);
+                  return carriers < gangSize;
+                });
+                if (leaderNeedingMore) {
+                  w.lintelTask = true;
+                  w.lintelPhase = 'fetch';
+                  w.lintelTargetIdx = leaderNeedingMore.lintelTargetIdx;
+                  if (!leaderNeedingMore.lintelPartner) {
+                    // Bli follower
+                    w.lintelRole = 'follower';
+                    w.lintelPartner = leaderNeedingMore;
+                    w.lintelPickupSpot = { x: leaderNeedingMore.lintelPickupSpot.x + 30, y: leaderNeedingMore.lintelPickupSpot.y };
+                    leaderNeedingMore.lintelPartner = w;
+                  } else {
+                    // Bli helper
+                    w.lintelRole = 'helper';
+                    if (!leaderNeedingMore.lintelHelpers) leaderNeedingMore.lintelHelpers = [];
+                    const helperIdx = leaderNeedingMore.lintelHelpers.length;
+                    w.lintelPickupSpot = {
+                      x: leaderNeedingMore.lintelPickupSpot.x + 15 - helperIdx * 30,
+                      y: leaderNeedingMore.lintelPickupSpot.y + (helperIdx === 0 ? 6 : -6),
+                    };
+                    leaderNeedingMore.lintelHelpers.push(w);
+                    w.lintelLeader = leaderNeedingMore;
+                  }
+                  continue;
+                }
+                // Annars: bli leader
+                const activeLeaders = workers.filter(o => o.lintelTask && o.lintelRole === 'leader').length;
+                const maxGangs = state.level === 2 ? 2 : 1;  // bana 2 = upp till 2 gang à 4
+                if (activeLeaders < maxGangs) {
                   w.lintelTask = true;
                   w.lintelRole = 'leader';
                   w.lintelPhase = 'fetch';
+                  w.lintelPickupSpot = {
+                    x: quarry.x + 30 + Math.random() * (quarry.w - 90),
+                    y: quarry.y + quarry.h - 6,
+                  };
+                  const reserved = workers.filter(o => o.lintelTargetIdx != null).map(o => o.lintelTargetIdx);
+                  let nextIdx = state.blocksPlaced;
+                  while (reserved.includes(nextIdx)) nextIdx++;
+                  w.lintelTargetIdx = nextIdx;
+                  w.lintelHelpers = [];
                   continue;
-                } else if (!followerExists) {
-                  const leader = workers.find(o => o.lintelTask && o.lintelRole === 'leader');
-                  if (leader) {
-                    w.lintelTask = true;
-                    w.lintelRole = 'follower';
-                    w.lintelPhase = 'fetch';
-                    w.lintelPartner = leader;
-                    leader.lintelPartner = w;
-                    continue;
-                  }
                 }
               }
               const buildRow = currentBuildLevel();
@@ -3759,6 +6137,8 @@
     updateTorches();
     assignBearers();
     assignCrankWorker();
+    updateLevelTransition();
+    updateWhipHelper();
 
     // Daytime birds — spawn små flockar då och då när det är ljust
     if (dayPhase > 0.4 && state.birds.length < 18 && Math.random() < 0.006) {
@@ -4265,6 +6645,9 @@
     w.lintelRole = null;
     w.lintelPartner = null;
     w.lintelPhase = null;
+    w.lintelPickupSpot = null;
+    w.lintelTargetIdx = null;
+    w.lintelTimer = 0;
   }
 
   function handleLintelTask(w) {
@@ -4272,9 +6655,15 @@
     const isLeader = w.lintelRole === 'leader';
     const phase = w.lintelPhase;
 
-    // Fas: gå till quarryn till sin egen plats
+    // Fas: gå till quarryn till sin egen plats (par-specifik om level 2)
     if (phase === 'fetch') {
-      const target = isLeader ? LINTEL_PICKUP_LEADER : LINTEL_PICKUP_FOLLOWER;
+      // Använd egen pickup-spot om sådan finns (level 2 par), annars de fasta lintel-positionerna
+      let target;
+      if (w.lintelPickupSpot) {
+        target = w.lintelPickupSpot;
+      } else {
+        target = isLeader ? LINTEL_PICKUP_LEADER : LINTEL_PICKUP_FOLLOWER;
+      }
       const dx = target.x - w.x, dy = target.y - w.y;
       const d = Math.hypot(dx, dy);
       if (d > 4) {
@@ -4330,12 +6719,14 @@
       return true;
     }
 
-    // Bär stenen tillsammans till lintel-positionen
+    // Bär stenen tillsammans till nästa block-position
     if (phase === 'carry') {
       if (isLeader) {
-        const next = pyramidBlockPos(30);
-        if (!next || state.blocksPlaced !== 30) {
-          // Något hände — släpp uppgiften
+        // Block-mål: lintelTargetIdx (om satt — bana 2) annars block 30 (bana 1)
+        const targetIdx = (w.lintelTargetIdx != null) ? w.lintelTargetIdx : 30;
+        const next = pyramidBlockPos(targetIdx);
+        if (!next || state.blocksPlaced > targetIdx) {
+          // Bygget har förbi-passat oss — släpp
           w.carrying = false;
           if (partner) partner.carrying = false;
           releaseLintelWorker(w);
@@ -4347,21 +6738,27 @@
         const dx = tx - w.x, dy = ty - w.y;
         const d = Math.hypot(dx, dy);
         if (d < 16) {
-          // Placera lintel-stenen
+          // Placera. Bana 2 placerar bara om det är NÄSTA-block-i-tur (annars vänta vid platsen)
+          if (state.blocksPlaced !== targetIdx) {
+            // Inte vår tur än — stå still och håll
+            w.vx = 0; w.vy = 0;
+            if (partner) { partner.vx = 0; partner.vy = 0; }
+            return true;
+          }
           state.blocksPlaced++;
-          state.score += 20;
+          state.score += (state.level === 2 ? 25 : 20);
           spawnFloater(next.x, next.y - 14, '+2', '#ffe070');
-          // Större settle för den breda lintel-stenen
-          state.blockSettleIdx = 30;
-          state.blockSettleTimer = 32;
-          for (let i = 0; i < 28; i++) {
+          state.blockSettleIdx = targetIdx;
+          state.blockSettleTimer = targetIdx === 30 ? 32 : 24;
+          const dustCount = targetIdx === 30 ? 28 : 18;
+          for (let i = 0; i < dustCount; i++) {
             state.cracks.push({
               x: next.x + (Math.random()-0.5)*48,
               y: next.y + 6,
               vx: (Math.random()-0.5)*3.5,
               vy: -Math.random()*2.8 - 0.4,
               life: 1.0,
-              color: i < 18 ? '#d4a070' : '#b88848',
+              color: i < (dustCount * 0.6) ? '#d4a070' : '#b88848',
               grav: 0.15,
             });
           }
@@ -4476,8 +6873,14 @@
     drawSmallPyramid(1170, 510, 80,  '#b88048', dayPhase);
     drawSmallPyramid(130,  510, 95,  '#c89058', dayPhase);
 
-    // Sphinx
-    drawSphinx(380, 480, dayPhase);
+    // Sphinx — bara på bana 1 (bana 2 är en annan plats)
+    if (state.level === 1) {
+      drawSphinx(380, 480, dayPhase);
+    }
+    // Bana 2: gamla pyramiden syns i bakgrunden (silhuett långt åt vänster)
+    if (state.level === 2) {
+      drawDistantOldPyramid(dayPhase);
+    }
 
     // Sand foreground
     const sandColor = mixHex('#e8c070', '#3a2860', 1 - dayPhase);
@@ -4497,7 +6900,8 @@
     drawWaterhole(dayPhase);
 
     // Bryggeri-kruka (öl) — slackerplats i mitten
-    drawBrewery(dayPhase);
+    // Bryggeriet bara på bana 1 (bana 2 är ny plats utan bryggeri)
+    if (state.level === 1) drawBrewery(dayPhase);
     drawHospital(dayPhase);
 
     // Facklor — stångerna syns alltid, lågorna bara när någon tänt dem på natten
@@ -4533,26 +6937,84 @@
       drawStretcherAtQuarry();
     }
 
-    // Lintel-stenen mellan de två lintel-bärarna (en stor bred sten)
+    // Stora stenen (bana 2) på SLÄDE med rep till bärarna; bana 1 block 30 = lyft.
     for (const w of workers) {
       if (w.lintelTask && w.lintelRole === 'leader' && w.lintelPartner &&
           w.lintelPhase === 'carry') {
         const leader = w, follower = w.lintelPartner;
-        if (Math.abs(leader.x - follower.x) > 100) continue;
-        const lo = Math.min(leader.x, follower.x);
-        const len = Math.abs(leader.x - follower.x);
-        const sy = Math.min(leader.y, follower.y) - 22;
-        // Stenens kropp (bred lintel — 2x normal)
-        ctx.fillStyle = '#d8b070';
-        ctx.fillRect(lo - 8, sy - 6, len + 16, 14);
-        ctx.fillStyle = '#b88848';
-        ctx.fillRect(lo - 8, sy + 6, len + 16, 2);
-        ctx.fillStyle = '#a07030';
-        ctx.fillRect(lo + len + 6, sy - 6, 2, 14);
-        // Mejselspår
-        ctx.fillStyle = 'rgba(80,40,10,0.3)';
-        ctx.fillRect(lo + 4, sy - 3, len + 4, 1);
-        ctx.fillRect(lo + 4, sy + 3, len + 4, 1);
+        const carriers = [leader, follower];
+        if (leader.lintelHelpers) {
+          for (const h of leader.lintelHelpers) if (h) carriers.push(h);
+        }
+        const useSled = state.level === 2;  // bana 2 = släde, bana 1 lintel = lyft
+        const isLintelL1 = leader.lintelTargetIdx === 30 && state.level === 1;
+        const stoneW = isLintelL1 ? PYR_BLOCK_W_BASE * 2 + 8 : PYR_BLOCK_W;
+        const stoneH = PYR_BLOCK_H;
+
+        if (useSled) {
+          // Släde-position: bakom bärarna (i färdriktning är carriers FRAMME)
+          // Hitta bakersta carrier-x (mot motsatt håll än facing)
+          const f = leader.facing || 1;
+          const backCarrierX = carriers.reduce(
+            (acc, c) => f > 0 ? Math.min(acc, c.x) : Math.max(acc, c.x), carriers[0].x);
+          const avgY = carriers.reduce((s, c) => s + c.y, 0) / carriers.length;
+          // Släden placeras 14 px bakom bakersta carrier
+          const sledCX = backCarrierX - f * (stoneW/2 + 18);
+          const sledTop = avgY + 4;  // släden i marknivå (under stenen)
+          // Trä-medar (2 planks under stenen)
+          ctx.fillStyle = '#5a3818';
+          ctx.fillRect(sledCX - stoneW/2 - 4, sledTop + 4, stoneW + 8, 3);
+          ctx.fillRect(sledCX - stoneW/2 - 4, sledTop + 9, stoneW + 8, 3);
+          // Upphöjda ändar fram + bak (sled-skidor som böjer uppåt)
+          ctx.fillStyle = '#7a4818';
+          ctx.fillRect(sledCX - stoneW/2 - 6, sledTop, 6, 4);
+          ctx.fillRect(sledCX + stoneW/2, sledTop, 6, 4);
+          // Tvärbalkar
+          ctx.fillStyle = '#3a2010';
+          ctx.fillRect(sledCX - stoneW/4, sledTop + 3, 2, 9);
+          ctx.fillRect(sledCX + stoneW/4 - 2, sledTop + 3, 2, 9);
+          // STENEN ovanpå släden
+          const stoneSY = sledTop - stoneH + 4;
+          ctx.fillStyle = '#d8b070';
+          ctx.fillRect(sledCX - stoneW/2, stoneSY, stoneW, stoneH);
+          ctx.fillStyle = '#b88848';
+          ctx.fillRect(sledCX - stoneW/2, stoneSY + stoneH - 3, stoneW, 2);
+          ctx.fillStyle = '#a07030';
+          ctx.fillRect(sledCX + stoneW/2 - 2, stoneSY, 2, stoneH);
+          ctx.fillStyle = 'rgba(80,40,10,0.3)';
+          ctx.fillRect(sledCX - stoneW/2 + 4, stoneSY + 3, stoneW - 8, 1);
+          ctx.fillRect(sledCX - stoneW/2 + 4, stoneSY + stoneH - 5, stoneW - 8, 1);
+          // Rep från sledens framkant till varje bärare
+          ctx.strokeStyle = '#7a5028';
+          ctx.lineWidth = 1.5;
+          const ropeStartX = sledCX + f * (stoneW/2 + 4);
+          const ropeStartY = sledTop + 2;
+          for (const c of carriers) {
+            ctx.beginPath();
+            ctx.moveTo(ropeStartX, ropeStartY);
+            const midX = (ropeStartX + c.x) / 2;
+            const midY = (ropeStartY + (c.y - 4)) / 2 + 3;  // lite sag
+            ctx.quadraticCurveTo(midX, midY, c.x, c.y - 4);
+            ctx.stroke();
+          }
+        } else {
+          // Lyft (gammal lintel-stil) — sten mellan 2 bärare
+          let cx = 0, cy = 0;
+          for (const c of carriers) { cx += c.x; cy += c.y; }
+          cx /= carriers.length;
+          cy /= carriers.length;
+          const sx = cx - stoneW / 2;
+          const sy = cy - 22 - stoneH / 2;
+          ctx.fillStyle = '#d8b070';
+          ctx.fillRect(sx, sy, stoneW, stoneH);
+          ctx.fillStyle = '#b88848';
+          ctx.fillRect(sx, sy + stoneH - 3, stoneW, 2);
+          ctx.fillStyle = '#a07030';
+          ctx.fillRect(sx + stoneW - 2, sy, 2, stoneH);
+          ctx.fillStyle = 'rgba(80,40,10,0.3)';
+          ctx.fillRect(sx + 4, sy + 3, stoneW - 8, 1);
+          ctx.fillRect(sx + 4, sy + stoneH - 5, stoneW - 8, 1);
+        }
       }
     }
 
@@ -4635,8 +7097,17 @@
       ctx.stroke();
     }
 
+    // Pisk-medhjälpare i vattenhålet (om upgrade vald)
+    if (state.whipHelper) drawWhipHelper(state.whipHelper);
+
     // Pratbubblor över de som har en
     for (const b of state.chatBubbles) drawChatBubble(b);
+
+    // Slavhandlarnas vagnar — ritas ovanpå för synlighet
+    drawLevelTransition();
+
+    // Sandstorm-overlay på bana 2 — drivande sandpartiklar + ljus dis
+    if (state.level === 2) drawSandstorm();
 
     // Birds (i bakgrunden, ovanför moln/dyner)
     for (const b of state.birds) drawBird(b);
@@ -5666,7 +8137,7 @@
     ctx.ellipse(6, 6, 130, 60, 0, 0, Math.PI*2);
     ctx.fill();
     // bubbla
-    ctx.fillStyle = '#fff8e0';
+    ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#000';
     ctx.lineWidth = 6;
     ctx.beginPath();
@@ -5679,11 +8150,11 @@
     ctx.lineTo(-130, 110);
     ctx.lineTo(-30, 45);
     ctx.closePath();
-    ctx.fillStyle = '#fff8e0';
+    ctx.fillStyle = '#ffffff';
     ctx.fill();
     ctx.stroke();
     // dölj svans-anslutning till bubblan
-    ctx.fillStyle = '#fff8e0';
+    ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.ellipse(-50, 30, 40, 12, -0.4, 0, Math.PI*2);
     ctx.fill();
@@ -6052,8 +8523,10 @@
       ctx.fillRect(bx, by + bh - 2, bw - 2, 2);
     }
 
-    const blockW = 32;
-    const blockH = 22;
+    // Bana 2: stenarna är 2x större (matchar de bygg-block som behövs)
+    const scale = state.level === 2 ? 1.55 : 1;  // inte exakt 2x — stenhögen vore för stor
+    const blockW = Math.round(32 * scale);
+    const blockH = Math.round(22 * scale);
     // Bottenraden — 7 block (bredare bas)
     for (let i = 0; i < 7; i++) {
       drawStoneBlock(quarry.x + i*(blockW - 4) - 5, baseY - blockH, blockW, blockH);
@@ -6076,22 +8549,21 @@
     // Toppen — 1 block
     drawStoneBlock(quarry.x + 88, baseY - blockH*6 + 12, blockW - 12, blockH - 4);
 
-    // Skylt på en planka stickande upp
-    const signX = quarry.x + quarry.w/2;
-    const signY = quarry.y - 28;
-    // stång
-    ctx.fillStyle = '#5a3818';
-    ctx.fillRect(signX - 2, signY + 8, 4, 22);
-    // planka
-    ctx.fillStyle = '#a87038';
-    ctx.fillRect(signX - 32, signY - 4, 64, 18);
-    ctx.fillStyle = '#c89058';
-    ctx.fillRect(signX - 32, signY - 4, 64, 4);
-    // text
-    ctx.fillStyle = '#2a1408';
-    ctx.font = 'bold 12px Georgia';
-    ctx.textAlign = 'center';
-    ctx.fillText('QUARRY', signX, signY + 9);
+    // Skylt — bara på bana 1 (bana 2 är på ny plats utan skylt)
+    if (state.level !== 2) {
+      const signX = quarry.x + quarry.w/2;
+      const signY = quarry.y - 28;
+      ctx.fillStyle = '#5a3818';
+      ctx.fillRect(signX - 2, signY + 8, 4, 22);
+      ctx.fillStyle = '#a87038';
+      ctx.fillRect(signX - 32, signY - 4, 64, 18);
+      ctx.fillStyle = '#c89058';
+      ctx.fillRect(signX - 32, signY - 4, 64, 4);
+      ctx.fillStyle = '#2a1408';
+      ctx.font = 'bold 12px Georgia';
+      ctx.textAlign = 'center';
+      ctx.fillText('QUARRY', signX, signY + 9);
+    }
   }
 
   // ---------- Vedhög + färdiga stegar (invid quarry, ser ut att tillhöra) ----------
@@ -6196,6 +8668,8 @@
   // 2D-vänlig: bara vertikala stolpar med horisontella plankor + en stege.
   // Växer i höjd med pyramiden.
   function drawScaffolding() {
+    // Pyramiden klar — ta bort ställningarna (workers står inte längre på dem)
+    if (state.blocksPlaced >= state.blocksTarget) return;
     const row = currentBuildLevel();
     if (row < 1 && state.blocksPlaced < 4) return;  // ingen ställning på rad 0
 
@@ -6297,6 +8771,8 @@
   // Front-ställning som workers bygger upp genom trä-leveranser.
   // Höjden växer med state.scaffoldWood, capped vid arbetsraden.
   function drawFrontScaffold() {
+    // Pyramiden klar — front-ställningen rivs
+    if (state.blocksPlaced >= state.blocksTarget) return;
     const row = currentBuildLevel();
     if (row < 3) return;
     if ((state.scaffoldWood || 0) < 1) return;
@@ -6930,7 +9406,7 @@
     ctx.fillRect(x - 6, y + 4, 5, 18 + legSwing);
     ctx.fillRect(x + 1, y + 4, 5, 18 - legSwing);
 
-    ctx.fillStyle = '#fff8e0';
+    ctx.fillStyle = '#ffffff';
     ctx.fillRect(x - 11, y - 4, 22, 14);
     ctx.fillStyle = '#e8c050';
     ctx.fillRect(x - 11, y + 8, 22, 3);
@@ -7254,19 +9730,28 @@
         ctx.fillRect(x - 7, y - 2, 14, 8);
       }
 
-      // Torso (tjocka är bredare och har en mage)
+      // Torso (tjocka är bredare och har MARKANT utskjutande mage + dubbel-haka)
       ctx.fillStyle = w.skin;
       if (w.type === 'fat') {
-        ctx.fillRect(x - 8, y - 12 + bob, 16, 12);
-        // utskjutande mage
+        // Bredare torso
+        ctx.fillRect(x - 10, y - 12 + bob, 20, 12);
+        // STOR mage som sticker ut framtill
         ctx.beginPath();
-        ctx.ellipse(x, y - 4 + bob, 10, 7, 0, 0, Math.PI*2);
+        ctx.ellipse(x, y - 2 + bob, 14, 9, 0, 0, Math.PI*2);
         ctx.fill();
-        // bröstvårta-detalj
+        // Sido-rund mage på facing-sidan (extra bulle)
+        ctx.beginPath();
+        ctx.ellipse(x + 6 * (w.facing||1), y - 4 + bob, 6, 5, 0, 0, Math.PI*2);
+        ctx.fill();
+        // Bröstvårta-detalj
         ctx.fillStyle = mixHex(w.skin, '#000000', 0.3);
-        ctx.fillRect(x - 4, y - 8 + bob, 1, 1);
-        ctx.fillRect(x + 3, y - 8 + bob, 1, 1);
+        ctx.fillRect(x - 5, y - 9 + bob, 1, 1);
+        ctx.fillRect(x + 4, y - 9 + bob, 1, 1);
+        // Dubbel-haka under huvudet
         ctx.fillStyle = w.skin;
+        ctx.beginPath();
+        ctx.ellipse(x, y - 13 + bob, 7, 2.5, 0, 0, Math.PI*2);
+        ctx.fill();
       } else {
         ctx.fillRect(x - 6, y - 12 + bob, 12, 11);
       }
@@ -7927,17 +10412,17 @@
 
     ctx.save();
     ctx.globalAlpha = alpha;
-    ctx.font = "13px 'Noto Sans Egyptian Hieroglyphs', 'Segoe UI Historic', Georgia, serif";
+    ctx.font = "18px 'Noto Sans Egyptian Hieroglyphs', 'Segoe UI Historic', Georgia, serif";
     const tw = ctx.measureText(text).width;
-    const padX = 14, padY = 12;
-    const bw = Math.max(36, tw + padX * 2);
-    const bh = 13 + padY * 2;
+    const padX = 10, padY = 8;
+    const bw = Math.max(32, tw + padX * 2);
+    const bh = 18 + padY * 2;
 
-    // Bubbla med rundade hörn
-    ctx.fillStyle = '#fff8e0';
+    // Bubbla med rundade hörn — tunnare kontur, större glyph-plats
+    ctx.fillStyle = '#ffffff';
     ctx.strokeStyle = '#3a2010';
-    ctx.lineWidth = 2;
-    const r = 7;
+    ctx.lineWidth = 1;
+    const r = 6;
     ctx.beginPath();
     ctx.moveTo(x - bw/2 + r, y - bh);
     ctx.lineTo(x + bw/2 - r, y - bh);
@@ -7953,7 +10438,7 @@
     ctx.stroke();
 
     // Svans (pekar mot kropp)
-    ctx.fillStyle = '#fff8e0';
+    ctx.fillStyle = '#ffffff';
     ctx.beginPath();
     ctx.moveTo(x - 4, y);
     ctx.lineTo(x + 4, y);
@@ -7967,8 +10452,8 @@
     ctx.lineTo(x - 1, y + 7);
     ctx.stroke();
 
-    // Text
-    ctx.fillStyle = '#2a1408';
+    // Text — mörkare + skarpare för tydligare hieroglyfer
+    ctx.fillStyle = '#0a0400';
     ctx.textAlign = 'center';
     ctx.textBaseline = 'middle';
     ctx.fillText(text, x, y - bh/2 + 1);
@@ -8088,7 +10573,7 @@
     state.bloodSplatters.length = 0;
     state.chatBubbles.length = 0;
     workers.length = 0;
-    spawnWorkers(TOTAL_WORKERS);
+    // Slavarna kommer via slavhandlarnas vagnar (levelTransition) — inga direkt spawnade
     state.animals.length = 0;
     spawnAnimals(3);
     // Återställ facklor — alla släckta och utan tändar-uppdrag
@@ -8107,7 +10592,16 @@
       w.crankPhase = null;
     }
     pharaoh.x = W/2; pharaoh.y = H*0.72;
+    // Nollställ level (för retry efter bana 2) och slavhandlar-vagn-state
+    state.level = 1;
+    state.phase = 'building';
+    levelTransition.active = false;
+    levelTransition.phase = null;
+    levelTransition.wagons = [];
+    applyLevelScale();
     overlay.classList.add('hidden');
+    // Slavhandlarna kör in med första kullen slavar på bana 1
+    startLevelTransition({ level: 1, slaveCount: TOTAL_WORKERS });
     buildMusicQueue();
     startMusic();
   }
@@ -8159,6 +10653,14 @@
 
   startBtn.addEventListener('click', startGame);
 
+  const continueBtn = document.getElementById('continueBtn');
+  if (continueBtn) {
+    continueBtn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      continueAfterWin();
+    });
+  }
+
   const debugIntroBtn = document.getElementById('debugIntroBtn');
   if (debugIntroBtn) {
     debugIntroBtn.addEventListener('click', (e) => {
@@ -8173,6 +10675,14 @@
     debugContinueBtn.addEventListener('click', (e) => {
       e.stopPropagation();
       continueAfterWin();
+    });
+  }
+
+  const debugLevel2Btn = document.getElementById('debugLevel2Btn');
+  if (debugLevel2Btn) {
+    debugLevel2Btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      startLevelTransition({ fromDebug: true });
     });
   }
 
