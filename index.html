@@ -924,10 +924,10 @@
     });
   }
 
-  // ---------- Kill-cam zoom-in (när någon piskas ner) ----------
-  const ZOOM_IN_FRAMES   = 22;
-  const ZOOM_HOLD_FRAMES = 22;
-  const ZOOM_OUT_FRAMES  = 32;
+  // ---------- Kill-cam zoom-in (när någon piskas ner) — dramatisk slow-motion ----------
+  const ZOOM_IN_FRAMES   = 28;
+  const ZOOM_HOLD_FRAMES = 45;   // längre hold för dramatik
+  const ZOOM_OUT_FRAMES  = 36;
   const ZOOM_TOTAL_FRAMES = ZOOM_IN_FRAMES + ZOOM_HOLD_FRAMES + ZOOM_OUT_FRAMES;
   const killZoom = {
     active: false,
@@ -935,31 +935,39 @@
     total: ZOOM_TOTAL_FRAMES,
     victimX: 0,
     victimY: 0,
+    flashFrame: -1,   // frame när "kroken" landar (mitt i in)
   };
   function triggerKillZoom(w) {
     if (killZoom.active) return;
-    if (Math.random() > 0.45) return; // ~45% chans
+    // ALLTID trigger på killing blow — dramatiskt filmmoment
     killZoom.active = true;
     killZoom.timer = killZoom.total;
     killZoom.victimX = w.x;
     killZoom.victimY = w.y;
+    killZoom.flashFrame = ZOOM_IN_FRAMES - 2;   // vit blink när kameran är nästan inne
   }
   function inKillZoom() { return killZoom.active; }
   function killZoomState() {
-    // returnerar { scale, vignette, elapsed, phase }
-    if (!killZoom.active) return { scale: 1, vignette: 0, phase: 'none' };
+    if (!killZoom.active) return { scale: 1, vignette: 0, phase: 'none', flash: 0 };
     const elapsed = killZoom.total - killZoom.timer;
-    const peakScale = 3.2;
+    const peakScale = 4.5;   // mer zoom = mer dramatiskt
+    // Vit flash-burst runt impact-frame
+    let flash = 0;
+    if (elapsed === killZoom.flashFrame || elapsed === killZoom.flashFrame + 1) flash = 1;
+    else if (elapsed === killZoom.flashFrame + 2 || elapsed === killZoom.flashFrame - 1) flash = 0.5;
     if (elapsed < ZOOM_IN_FRAMES) {
       const t = elapsed / ZOOM_IN_FRAMES;
       const eased = 1 - Math.pow(1 - t, 2.6);
-      return { scale: 1 + eased * (peakScale - 1), vignette: eased, phase: 'in' };
+      return { scale: 1 + eased * (peakScale - 1), vignette: eased, phase: 'in', flash };
     } else if (elapsed < ZOOM_IN_FRAMES + ZOOM_HOLD_FRAMES) {
-      return { scale: peakScale, vignette: 1, phase: 'hold' };
+      // Liten inzoom-drift under hold — kameran fortsätter röra sig subtilt
+      const t = (elapsed - ZOOM_IN_FRAMES) / ZOOM_HOLD_FRAMES;
+      const drift = 1 + t * 0.15;
+      return { scale: peakScale * drift, vignette: 1, phase: 'hold', flash };
     } else {
       const t = (elapsed - ZOOM_IN_FRAMES - ZOOM_HOLD_FRAMES) / ZOOM_OUT_FRAMES;
       const eased = 1 - Math.pow(1 - t, 2.0);
-      return { scale: peakScale - eased * (peakScale - 1), vignette: 1 - eased, phase: 'out' };
+      return { scale: peakScale - eased * (peakScale - 1), vignette: 1 - eased, phase: 'out', flash };
     }
   }
 
@@ -12225,17 +12233,30 @@
 
       // Röd impact-flash första frames av hold-fasen
       const elapsed = killZoom.total - killZoom.timer;
-      if (elapsed >= ZOOM_IN_FRAMES && elapsed < ZOOM_IN_FRAMES + 8) {
-        const flashT = 1 - (elapsed - ZOOM_IN_FRAMES) / 8;
-        ctx.fillStyle = `rgba(180,20,20,${flashT * 0.45})`;
+      // Vit flash på impact-frame — som en fotobelysning i slow-motion
+      if (kz.flash > 0) {
+        ctx.fillStyle = `rgba(255,240,220,${kz.flash * 0.85})`;
         ctx.fillRect(0, 0, W, H);
       }
-
+      // Röd blod-flash efter kroken
+      if (elapsed >= ZOOM_IN_FRAMES && elapsed < ZOOM_IN_FRAMES + 12) {
+        const flashT = 1 - (elapsed - ZOOM_IN_FRAMES) / 12;
+        ctx.fillStyle = `rgba(200,20,20,${flashT * 0.55})`;
+        ctx.fillRect(0, 0, W, H);
+      }
       // Blod-strimmor som kantöverlägg under hold
       if (kz.phase === 'hold' || kz.phase === 'in') {
         ctx.fillStyle = `rgba(120,8,8,${v * 0.5})`;
         ctx.fillRect(0, 0, W, 28);
         ctx.fillRect(0, H-28, W, 28);
+      }
+      // Dramatiskt text-tips under hold — "𓅱" (död-tecken) blinkar
+      if (kz.phase === 'hold' && Math.floor(elapsed / 4) % 2 === 0) {
+        ctx.fillStyle = `rgba(255,100,80,${v * 0.9})`;
+        ctx.font = 'bold 44px Georgia';
+        ctx.textAlign = 'center';
+        ctx.fillText('𓅱', W/2, H/2 - 80);
+        ctx.textAlign = 'left';
       }
     }
 
@@ -19373,13 +19394,14 @@
       if (killZoom.timer <= 0) killZoom.active = false;
     }
 
-    // Slow-mo: vid zoom-in och hold, uppdatera world var 4:e frame.
-    // Vid zoom-out, accelerera tillbaka (var 2:a frame). Övrigt: normal.
+    // Slow-mo: mer intensiv under hold för dramatiskt filmmoment
     let shouldUpdate = true;
     if (killZoom.active) {
       const kz = killZoomState();
-      if (kz.phase === 'in' || kz.phase === 'hold') {
-        shouldUpdate = (frameCounter % 4 === 0);
+      if (kz.phase === 'in') {
+        shouldUpdate = (frameCounter % 5 === 0);   // ~12% hastighet
+      } else if (kz.phase === 'hold') {
+        shouldUpdate = (frameCounter % 8 === 0);   // ~12.5% hastighet — nästan frusen
       } else if (kz.phase === 'out') {
         shouldUpdate = (frameCounter % 2 === 0);
       }
