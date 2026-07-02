@@ -3058,6 +3058,59 @@
   }
 
   // ---------- Transformations-cutscene (Farao → Caesar) ----------
+  // Visa modal med val (Continue eller Next Level) efter bana 1 klar
+  function showLevel1CompleteModal() {
+    // Skapa overlay dynamiskt (existerande DOM så vi inte behöver ändra HTML)
+    const existing = document.getElementById('level1CompleteModal');
+    if (existing) existing.remove();
+    const modal = document.createElement('div');
+    modal.id = 'level1CompleteModal';
+    modal.style.cssText = `
+      position: fixed; inset: 0; background: rgba(0,0,0,0.72);
+      display: flex; align-items: center; justify-content: center;
+      z-index: 9999; font-family: Georgia, serif;
+    `;
+    modal.innerHTML = `
+      <div style="background: linear-gradient(180deg, #3a2418, #1e1408);
+                  border: 3px solid #a08050; border-radius: 8px;
+                  padding: 32px 48px; text-align: center; color: #f4d060;
+                  box-shadow: 0 0 40px rgba(200,150,60,0.4);">
+        <div style="font-size: 48px; margin-bottom: 8px;">𓉴</div>
+        <div style="font-size: 20px; margin-bottom: 4px; color: #ffd070;">𓊪𓇋𓂋𓐢𓅓𓂧</div>
+        <div style="font-size: 14px; color: #c8a870; margin-bottom: 24px;">pyramiden är fullbordad</div>
+        <div style="display: flex; gap: 20px; justify-content: center;">
+          <button id="btnContinue" style="
+            background: #5a3818; color: #f4d060; border: 2px solid #a08050;
+            padding: 14px 24px; border-radius: 6px; cursor: pointer;
+            font-family: Georgia, serif; font-size: 16px;
+            display: flex; flex-direction: column; align-items: center; gap: 4px;
+          ">
+            <span style="font-size: 28px;">𓋴𓊪𓂋</span>
+            <span style="font-size: 11px; color: #c8a870;">fortsätt</span>
+          </button>
+          <button id="btnNextLevel" style="
+            background: #6a3010; color: #ffd070; border: 2px solid #d09040;
+            padding: 14px 24px; border-radius: 6px; cursor: pointer;
+            font-family: Georgia, serif; font-size: 16px;
+            display: flex; flex-direction: column; align-items: center; gap: 4px;
+          ">
+            <span style="font-size: 28px;">𓁶𓅃𓊪</span>
+            <span style="font-size: 11px; color: #d0a880;">nästa bana</span>
+          </button>
+        </div>
+      </div>
+    `;
+    document.body.appendChild(modal);
+    document.getElementById('btnContinue').addEventListener('click', () => {
+      modal.remove();
+      state.postGame = true;   // fortsätt spela i klar-läge
+    });
+    document.getElementById('btnNextLevel').addEventListener('click', () => {
+      modal.remove();
+      startTransformIntro();
+    });
+  }
+
   function startTransformIntro(opts) {
     opts = opts || {};
     if (transformIntro.active) return;
@@ -5567,7 +5620,26 @@
       // Push/bråk-event
       fightingTarget: null,
       fightTimer: 0,
-      fightPhase: null,         // 'shoving' | 'startled' | null
+      fightPhase: null,
+      // Kärlek och ogillande — tilldelas efter alla spawns via setupRelationships()
+      loveTarget: null,
+      loveIsMutual: false,
+      dislikeTarget: null,
+      // Interaktionsläge
+      interactionType: null,    // 'kissing' | 'playing' | 'disliking'
+      interactionTimer: 0,
+      interactionPartner: null,
+      interactionCooldown: 0,
+      // Subtil "vaknar upp"-gest (armen höjs kort)
+      wakeGestureTimer: 0,
+      // Reshaper — tar en sten från hold-högen och hackar den till rätt storlek
+      reshaperTask: false,
+      reshaperPhase: null,
+      reshaperTimer: 0,
+      reshaperStoneId: null,
+      // In-transit chisel: bärare tar sin sten ner till hackningszon och reshapear
+      inTransitChisel: null,   // 'walkTo' | 'chiseling' | null
+      chiselTimer: 0,
     };
   }
   function spawnWorkers(n) {
@@ -5578,6 +5650,40 @@
       [WORKER_TYPE_POOL[i], WORKER_TYPE_POOL[j]] = [WORKER_TYPE_POOL[j], WORKER_TYPE_POOL[i]];
     }
     for (let i = 0; i < n; i++) workers.push(makeWorker(false));
+    setupRelationships();
+  }
+
+  // Sätt upp initiala kärleks-/ogillanderelationer så bygden känns levande
+  function setupRelationships() {
+    const eligible = workers.filter(w => w.type === 'man' || w.type === 'woman');
+    for (const w of eligible) {
+      if (w.loveTarget || w.dislikeTarget) continue;   // redan tilldelat
+      // 22% chans att slaven är förälskad i någon (varav ~50% ömsesidigt)
+      if (Math.random() < 0.22) {
+        const candidates = eligible.filter(o =>
+          o !== w && !o.loveTarget && !w.dislikeTarget
+        );
+        if (candidates.length > 0) {
+          const target = candidates[Math.floor(Math.random() * candidates.length)];
+          w.loveTarget = target;
+          if (Math.random() < 0.5) {
+            target.loveTarget = w;
+            w.loveIsMutual = true;
+            target.loveIsMutual = true;
+          }
+        }
+      }
+      // 12% chans att slaven ogillar någon (rival)
+      if (Math.random() < 0.12 && !w.dislikeTarget) {
+        const candidates = eligible.filter(o =>
+          o !== w && o !== w.loveTarget && !o.dislikeTarget
+        );
+        if (candidates.length > 0) {
+          const target = candidates[Math.floor(Math.random() * candidates.length)];
+          w.dislikeTarget = target;
+        }
+      }
+    }
   }
 
   // ---------- Animals (cats) ----------
@@ -6821,6 +6927,10 @@
       if (w.sledDragTask) {
         if (handleSledDragTask(w)) continue;
       }
+      // Egypt: reshaper — hackar en hold-sten till rätt storlek när inget annat produceras
+      if (w.reshaperTask) {
+        if (handleReshaperTask(w)) continue;
+      }
 
       // Fly-försök — springer mot vänster kant tills timern rinner ut (fångas) eller når kanten
       if (w.escaping) {
@@ -7845,6 +7955,79 @@
           const tx = next.x + (w.x < next.x ? -20 : 20);
           const ty = next.y + 10;
           moveWorkerToward(w, tx, ty);
+          // Om bäraren beslutat hacka om sin sten — gå till chisel-zon, hacka, ny id, gå tillbaka
+          if (state.era === 'egypt' && state.level === 1 && w.inTransitChisel) {
+            const chiselPos = { x: quarry.x + quarry.w + 40, y: quarry.y + quarry.h + 8 };
+            if (w.inTransitChisel === 'walkTo') {
+              moveWorkerToward(w, chiselPos.x, chiselPos.y);
+              if (dist2(w.x, w.y, chiselPos.x, chiselPos.y) < 12) {
+                w.inTransitChisel = 'chiseling';
+                w.chiselTimer = 180;   // 3s hackning
+              }
+              continue;
+            }
+            if (w.inTransitChisel === 'chiseling') {
+              w.chiselTimer--;
+              // Damm-partiklar var 8:e frame
+              if (state.time % 8 === 0) {
+                for (let i = 0; i < 3; i++) {
+                  state.cracks.push({
+                    x: w.x + (Math.random()-0.5)*10,
+                    y: w.y - 6 + Math.random()*6,
+                    vx: (Math.random()-0.5)*1.5,
+                    vy: -Math.random()*1.2,
+                    life: 0.7, color: '#d4a070', grav: 0.1,
+                  });
+                }
+              }
+              if (w.chiselTimer <= 0) {
+                // Tilldela ny id som matchar en oplacerad slot i aktuell rad
+                const buildRow = currentBuildableRow();
+                const rowSlots = pyramidRowSlots(buildRow);
+                const availSlot = rowSlots.find(s => !state.placedSlots.has(s) &&
+                  !workers.some(o => o !== w && o.reservedSlotIdx === s));
+                if (availSlot != null) {
+                  w.carriedStoneId = availSlot;
+                  w.reservedSlotIdx = availSlot;
+                  w.targetStoneId = availSlot;
+                  spawnFloater(w.x, w.y - 20, `✂ #${availSlot}`, '#f0d080');
+                } else {
+                  // Ingen slot ledig — släpp som surplus
+                  state.egyptSurplus = Math.min(30, (state.egyptSurplus || 0) + 1);
+                  if (state.stoneIdsPerPile && w.carriedStoneId != null) {
+                    state.stoneIdsPerPile.surplus.push(w.carriedStoneId);
+                  }
+                  w.carriedStoneId = null;
+                  w.carrying = false;
+                  w.reservedSlotIdx = null;
+                }
+                w.inTransitChisel = null;
+                w.chiselTimer = 0;
+                w.pyramidWaitTimer = 0;
+                w.target = null;
+              }
+              continue;
+            }
+          }
+          // Om bäraren beslutat gå till surplus-högen (signalerad drop)
+          if (state.era === 'egypt' && state.level === 1 && w.walkingToSurplus) {
+            const surplusPos = egyptSurplusPilePos();
+            moveWorkerToward(w, surplusPos.x - 8, surplusPos.y + 6);
+            if (dist2(w.x, w.y, surplusPos.x - 8, surplusPos.y + 6) < 12) {
+              state.egyptSurplus = Math.min(30, (state.egyptSurplus || 0) + 1);
+              if (state.stoneIdsPerPile && w.carriedStoneId != null) {
+                state.stoneIdsPerPile.surplus.push(w.carriedStoneId);
+              }
+              w.carriedStoneId = null;
+              w.carrying = false;
+              w.reservedSlotIdx = null;
+              w.walkingToSurplus = false;
+              w.pyramidWaitTimer = 0;
+              w.target = null;
+              spawnFloater(surplusPos.x, surplusPos.y - 12, '⇘', '#d8a870');
+            }
+            continue;
+          }
           // Om bäraren redan bestämt att gå till hold-högen — walk-flow
           if (state.era === 'egypt' && state.level === 1 && w.walkingToHold) {
             const holdPos = egyptHoldPilePos();
@@ -7876,7 +8059,7 @@
                 if (newSlot != null) { w.reservedSlotIdx = newSlot; w.pyramidWaitTimer = 0; continue; }
                 // Ingen slot tillgänglig — pyramiden klar? gå ur (surplus drop nedan)
               } else {
-                // Är slot i aktuell rad? Annars vänta för lägre rader
+                // Är slot i aktuell rad? Annars vänta för lägre rader (eller signalera drop)
                 const buildRow = currentBuildableRow();
                 const rowSlots = pyramidRowSlots(buildRow);
                 if (!rowSlots.includes(targetIdx)) {
@@ -7887,6 +8070,11 @@
                     continue;
                   }
                   w.pyramidWaitTimer = (w.pyramidWaitTimer || 0) + 1;
+                  // Om vi väntat > 10s → ta stenen till hackningszon och reshapa den
+                  if (w.pyramidWaitTimer > 600 && !w.inTransitChisel && !w.walkingToSurplus) {
+                    w.inTransitChisel = 'walkTo';
+                    w.chiselTimer = 0;
+                  }
                   continue;
                 }
               }
@@ -7966,8 +8154,8 @@
             }
             if (state.blocksPlaced >= state.blocksTarget && !state.won) {
               state.won = true;
-              // Bana 1 klar → transformations-cutscene (Farao → Caesar) → Rom-scenen (bana 2)
-              setTimeout(() => startTransformIntro(), 500);
+              // Bana 1 klar → visa val-modal (continue eller next-level) innan transform-cutscene
+              setTimeout(() => showLevel1CompleteModal(), 500);
             }
           }
         }
@@ -8042,6 +8230,8 @@
     assignSledDragGang();
     // Också: dra stora block från quarry till station
     assignSledGang();
+    // Reshaper: hackar hold-sten till rätt storlek när inget annat funkar
+    assignReshaper();
     updateLevelTransition();
     updateMolds();
     updateColosseumPaint();
@@ -8972,9 +9162,15 @@
     }
     // Auto-transitioner
     if (sled.state === 'at-station' && sled.load >= sled.capacity) {
-      sled.state = 'awaiting-drag';
-      const dest = stationSledPyramidPos(sled.id);
-      sled.destX = dest.x; sled.destY = dest.y;
+      // Prio: bara dra ut om ingen annan sled är vid pyramiden (så ALLTID en sled nere)
+      const otherBusyUp = (state.stationSleds || []).some(s => s !== sled &&
+        (s.state === 'at-pyramid' && s.load > 0) ||
+        s.state === 'awaiting-drag' || s.state === 'dragging-out');
+      if (!otherBusyUp) {
+        sled.state = 'awaiting-drag';
+        const dest = stationSledPyramidPos(sled.id);
+        sled.destX = dest.x; sled.destY = dest.y;
+      }
     }
     // Om vi väntar på lintel-slot (blocksPlaced === 30) och det finns någon last → dra upp DIREKT
     // så bäraren kan placera slot 30 (renderas 2× bred i pyramiden)
@@ -9111,6 +9307,30 @@
           }
         }
       }
+      // Subtil väckning-gest räknar ner per tick
+      if (w.wakeGestureTimer > 0) w.wakeGestureTimer = Math.max(0, w.wakeGestureTimer - 30);
+      // INTERAKTIONER: kärleks-pussar och ogillande-gester nära love/dislike-mål
+      if (w.interactionCooldown > 0) w.interactionCooldown = Math.max(0, w.interactionCooldown - 30);
+      if (w.interactionTimer > 0) w.interactionTimer = Math.max(0, w.interactionTimer - 30);
+      if (w.interactionTimer <= 0 && w.interactionCooldown <= 0 &&
+          (w.state === 'idle' || w.state === 'lazy') && !w.carrying &&
+          Math.random() < 0.15) {
+        const target = w.loveTarget && Math.hypot(w.loveTarget.x - w.x, w.loveTarget.y - w.y) < 30
+          ? w.loveTarget
+          : (w.dislikeTarget && Math.hypot(w.dislikeTarget.x - w.x, w.dislikeTarget.y - w.y) < 30
+              ? w.dislikeTarget : null);
+        if (target && target.state !== 'downed' && target.state !== 'falling') {
+          if (target === w.loveTarget) {
+            w.interactionType = w.loveIsMutual ? 'kissing' : 'liking';
+            w.interactionTimer = 90;
+          } else {
+            w.interactionType = 'disliking';
+            w.interactionTimer = 60;
+          }
+          w.interactionPartner = target;
+          w.interactionCooldown = 480 + Math.floor(Math.random() * 240);   // ~10s cooldown
+        }
+      }
       // BRÅK: mycket sällsynt (0.005% chans per tick) — bara idle slavar utan uppdrag
       const canFight = w.state === 'idle' && !w.carrying && !w.bearerOf &&
                        !w.torchTask && !w.woodTask && !w.lintelTask && !w.crankTask &&
@@ -9232,6 +9452,116 @@
     }
   }
 
+  // Position för reshapern — nära surplus-högen så det ser logiskt ut
+  function reshaperWorkPos() {
+    const sp = egyptSurplusPilePos();
+    return { x: sp.x + 30, y: sp.y - 2 };
+  }
+  // Assign reshaper: när inget annat kan producera, låt en slav hacka en hold-sten till rätt id
+  function assignReshaper() {
+    if (state.era !== 'egypt' || state.level !== 1) return;
+    if (workers.some(o => o.reshaperTask)) return;   // max 1 aktiv i taget
+    const holdCount = state.egyptHoldPile || 0;
+    if (holdCount <= 0) return;
+    // Villkor: inget nytt block sågas + surplus är tom + ingen matchande sten någonstans
+    const anyCutting = (state.bigBlocks || []).some(b => b.state === 'being-cut');
+    if (anyCutting) return;
+    if ((state.egyptSurplus || 0) > 0) return;
+    // Bara om pyramiden fortfarande behöver stenar
+    const pyrCap = state.blocksTarget || 55;
+    if (state.blocksPlaced >= pyrCap) return;
+    // Hitta lämplig slav
+    const eligible = workers.filter(w =>
+      w.state === 'idle' && !w.enteringFrom && !w.carrying &&
+      !w.torchTask && !w.bearerOf && !w.woodTask && !w.lintelTask &&
+      !w.crankTask && !w.sledTask && !w.cutterTask && !w.sledDragTask &&
+      !w.sawerTask && !w.waterPourerTask && !w.pieceCollectTask &&
+      !w.reshaperTask &&
+      (w.pickupTimer || 0) === 0 &&
+      w.scared < 0.7
+    );
+    if (eligible.length === 0) return;
+    const chosen = eligible[Math.floor(Math.random() * eligible.length)];
+    chosen.reshaperTask = true;
+    chosen.reshaperPhase = 'fetch';
+    chosen.reshaperTimer = 0;
+    chosen.target = null;
+  }
+
+  function handleReshaperTask(w) {
+    if (state.era !== 'egypt' || !w.reshaperTask) {
+      w.reshaperTask = false; w.reshaperPhase = null; w.reshaperTimer = 0;
+      return false;
+    }
+    if (w.reshaperPhase === 'fetch') {
+      const hp = egyptHoldPilePos();
+      const dx = hp.x - w.x, dy = hp.y + 4 - w.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 4) {
+        moveWorkerToward(w, hp.x, hp.y + 4);
+        w.walkPhase += 0.22;
+      } else {
+        // Plocka en sten från hold
+        if ((state.egyptHoldPile || 0) > 0) {
+          state.egyptHoldPile--;
+          if (state.stoneIdsPerPile && state.stoneIdsPerPile.hold.length > 0) {
+            w.reshaperStoneId = state.stoneIdsPerPile.hold.shift();
+          } else {
+            w.reshaperStoneId = -1;
+          }
+          w.carrying = true;
+          w.reshaperPhase = 'chiseling';
+          w.reshaperTimer = 240;   // 4s hackning
+        } else {
+          w.reshaperTask = false; w.reshaperPhase = null;
+        }
+      }
+      return true;
+    }
+    if (w.reshaperPhase === 'chiseling') {
+      // Gå till arbetspositionen nära surplus
+      const wp = reshaperWorkPos();
+      const dx = wp.x - w.x, dy = wp.y - w.y;
+      const d = Math.hypot(dx, dy);
+      if (d > 4) {
+        moveWorkerToward(w, wp.x, wp.y);
+        w.walkPhase += 0.22;
+        return true;
+      }
+      // Vid arbetspositionen — hacka
+      w.reshaperTimer--;
+      w.walkPhase = 0;   // stå still
+      // Damm-partiklar var 8:e frame
+      if (state.time % 8 === 0) {
+        for (let i = 0; i < 3; i++) {
+          state.cracks.push({
+            x: w.x + (Math.random()-0.5)*10,
+            y: w.y - 6 + Math.random()*6,
+            vx: (Math.random()-0.5)*1.5,
+            vy: -Math.random()*1.2,
+            life: 0.7, color: '#d4a070', grav: 0.1,
+          });
+        }
+      }
+      if (w.reshaperTimer <= 0) {
+        // Klar — tilldela ny id (som matchar nästa slot) och deposit på surplus
+        const newId = state.blocksPlaced;   // matchar aktuellt behov
+        state.egyptSurplus = Math.min(30, (state.egyptSurplus || 0) + 1);
+        if (state.stoneIdsPerPile) state.stoneIdsPerPile.surplus.push(newId);
+        const sp = egyptSurplusPilePos();
+        spawnFloater(sp.x, sp.y - 12, `✂→#${newId}`, '#f0d080');
+        w.carrying = false;
+        w.reshaperStoneId = null;
+        w.reshaperTask = false;
+        w.reshaperPhase = null;
+        w.reshaperTimer = 0;
+        w.target = null;
+      }
+      return true;
+    }
+    return false;
+  }
+
   // Efter pisk/task-release: ge slaven direkt en akut Egypt-uppgift
   // force = true: rensa gamla tasks (t.ex. vid pisk) — bygga pyramiden är alltid viktigast
   function assignUrgentEgyptTaskTo(w, force) {
@@ -9310,8 +9640,10 @@
       w.target = null;
       return;
     }
-    // Ingen akut uppgift — stå still där de är så natural bearer-AI kan hämta dem nästa frame
-    w.target = null;
+    // Ingen akut uppgift — gå mot pyramiden så de är beredda att hjälpa (första-dagen-entusiasm)
+    // Standardposition: nära sled@pyramid så de snabbt kan bli bärare
+    const pyrSled = stationSledPos(0);
+    w.target = { x: pyrSled.x + (Math.random()-0.5) * 40, y: pyrSled.y + 10 + (Math.random()-0.5) * 6 };
   }
 
   // Räkna hur många akuta Egypt-slots som behöver arbetare just nu
@@ -9384,7 +9716,8 @@
       w.energy = Math.max(w.energy, 40);
       w.wakeBoost = 120;
       w.target = null;
-      spawnFloater(w.x, w.y - 22, understaffed ? '𓊪!!' : '𓊪!', understaffed ? '#ff8060' : '#ffe070');
+      // Subtil väckning — kort armviftning istället för synligt floater-tecken
+      w.wakeGestureTimer = 40;
     }
   }
 
@@ -18388,6 +18721,53 @@
               ctx.fillRect(stoneX + bwCarry/2 - 0.5, stoneY + 2, 1, bhCarry - 4);
             }
           }
+        }
+      }
+
+      // Subtil väckning-gest (kort arm-vinkning uppåt-höger)
+      if (w.wakeGestureTimer > 0) {
+        const t = w.wakeGestureTimer / 40;   // 0..1
+        const waveAngle = Math.sin(state.time * 0.4) * 0.3;
+        const armEndX = x + 5 + Math.cos(-Math.PI/3 + waveAngle) * 12 * t;
+        const armEndY = y - 14 + Math.sin(-Math.PI/3 + waveAngle) * 12 * t;
+        ctx.strokeStyle = w.skin;
+        ctx.lineWidth = 2.4;
+        ctx.lineCap = 'round';
+        ctx.beginPath();
+        ctx.moveTo(x + 5, y - 10);
+        ctx.lineTo(armEndX, armEndY);
+        ctx.stroke();
+        ctx.lineCap = 'butt';
+      }
+      // Interaktions-överlägg (kärlek / ogilla / pussa)
+      if (w.interactionTimer > 0 && w.interactionPartner) {
+        const p = w.interactionPartner;
+        const midX = (x + p.x) / 2;
+        const topY = Math.min(y, p.y) - 34;
+        if (w.interactionType === 'kissing') {
+          const bob2 = Math.sin(state.time * 0.15) * 1.5;
+          ctx.fillStyle = '#ff5060';
+          ctx.font = 'bold 14px Georgia';
+          ctx.textAlign = 'center';
+          ctx.fillText('♥', midX, topY + bob2);
+          // Två små hjärtan på sidorna
+          ctx.font = '10px Georgia';
+          ctx.fillStyle = '#ff80a0';
+          ctx.fillText('♥', midX - 10, topY - 4);
+          ctx.fillText('♥', midX + 10, topY - 4);
+          ctx.textAlign = 'left';
+        } else if (w.interactionType === 'liking') {
+          ctx.fillStyle = '#ffb0c0';
+          ctx.font = 'bold 12px Georgia';
+          ctx.textAlign = 'center';
+          ctx.fillText('♥', x, y - 30);
+          ctx.textAlign = 'left';
+        } else if (w.interactionType === 'disliking') {
+          ctx.fillStyle = '#ff4040';
+          ctx.font = 'bold 12px monospace';
+          ctx.textAlign = 'center';
+          ctx.fillText('✗', x, y - 30);
+          ctx.textAlign = 'left';
         }
       }
 
