@@ -9340,8 +9340,6 @@
   function forceWakeForUrgentEgyptTasks() {
     if (state.era !== 'egypt' || state.level !== 1) return;
     const urgent = countUrgentEgyptSlots();
-    if (urgent <= 0) return;
-    // Räkna tillgängliga (idle, ledig) slavar som redan kan hoppa på
     const alreadyAvailable = workers.filter(w =>
       w.state === 'idle' && !w.enteringFrom && !w.carrying &&
       !w.torchTask && !w.bearerOf && !w.woodTask && !w.lintelTask &&
@@ -9350,9 +9348,26 @@
       (w.pickupTimer || 0) === 0 &&
       w.scared < 0.7
     ).length;
-    const stillNeeded = urgent - alreadyAvailable;
+    // Räkna slavar som gör PRODUKTIVT bygge-jobb
+    const productiveWorking = workers.filter(w =>
+      w.state !== 'downed' && w.state !== 'falling' &&
+      (w.carrying || w.sledTask || w.sledDragTask ||
+       w.sawerTask || w.waterPourerTask || w.pieceCollectTask || w.lintelTask)
+    ).length;
+    // Räkna alla levande slavar (inte downed)
+    const aliveCount = workers.filter(w => w.state !== 'downed').length;
+    // Om få jobbar produktivt (< 30% av levande) OCH pyramiden inte är klar → väck alla lata
+    const pyrCap = state.blocksTarget || 55;
+    const pyramidIncomplete = state.blocksPlaced < pyrCap;
+    const understaffed = pyramidIncomplete && productiveWorking < Math.max(3, aliveCount * 0.3);
+    if (urgent <= 0 && !understaffed) return;
+    // Bestäm hur många att väcka
+    let stillNeeded = urgent - alreadyAvailable;
+    if (understaffed) {
+      // Väck ALLA lata slavar när bygget är understaffad
+      stillNeeded = 999;
+    }
     if (stillNeeded <= 0) return;
-    // Väck slöa slavar (även de som ligger och sover)
     const lazySlaves = workers.filter(w =>
       w.state === 'lazy' &&
       !w.torchTask && !w.bearerOf && !w.carrying &&
@@ -9369,8 +9384,7 @@
       w.energy = Math.max(w.energy, 40);
       w.wakeBoost = 120;
       w.target = null;
-      // Liten "kallelse-stjärna" så det syns att de vaknade
-      spawnFloater(w.x, w.y - 22, '𓊪!', '#ffe070');
+      spawnFloater(w.x, w.y - 22, understaffed ? '𓊪!!' : '𓊪!', understaffed ? '#ff8060' : '#ffe070');
     }
   }
 
